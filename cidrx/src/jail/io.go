@@ -1,0 +1,171 @@
+package jail
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/ChristianF88/cidrx/iputils"
+)
+
+// Convert Jail to json with the json package
+func JailToJson(jail Jail) (string, error) {
+	jailJson, err := json.Marshal(jail)
+	if err != nil {
+		return "", err
+	}
+	return string(jailJson), nil
+}
+
+func JsonToJail(jailJson string) (Jail, error) {
+	var jail Jail
+	err := json.Unmarshal([]byte(jailJson), &jail)
+	if err != nil {
+		return Jail{}, err
+	}
+	return jail, nil
+}
+
+// WriteToFile writes the given content to a file with the specified filename
+func WriteToFile(filename string, content string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(content)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func ReadFromFile(filename string) (string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func JailToFile(jail Jail, filename string) error {
+
+	jailJson, err := JailToJson(jail)
+	if err != nil {
+		return err
+	}
+	err = WriteToFile(filename, jailJson)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func fileExists(filename string) bool {
+	_, err := os.Stat(filename)
+	return err == nil || !os.IsNotExist(err)
+}
+
+func FileToJail(filename string) (Jail, error) {
+	if !fileExists(filename) {
+		return NewJail(), nil
+	}
+
+	jailJson, err := ReadFromFile(filename)
+	if err != nil {
+		return Jail{}, err
+	}
+	jail, err := JsonToJail(jailJson)
+	if err != nil {
+		return Jail{}, err
+	}
+	return jail, nil
+}
+
+func ReadBanFile(filename string) []string {
+	// Read the file line by line and return array of cidrs
+	// ignore lines that start with '# '
+
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	var cidrs []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "# ") {
+			continue
+		}
+
+		line = strings.TrimSpace(line)
+
+		if !iputils.IsValidCidrOrIP(line) {
+			fmt.Println(fmt.Errorf("invalid CIDR or IP: %s", line))
+			continue
+		}
+
+		cidrs = append(cidrs, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil
+	}
+	return cidrs
+}
+
+func WriteBanFile(filename string, cidrs []string) error {
+	return WriteBanFileWithBlacklist(filename, cidrs, nil)
+}
+
+func WriteBanFileWithBlacklist(filename string, cidrs []string, blacklistCIDRs []string) error {
+	// Write the cidrs to the file
+	// ignore lines that start with '# '
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	var modificationTime string = time.Now().Format("2006-01-02 15:04:05")
+	if _, err := file.WriteString(fmt.Sprintf("# This file was generated automatically. Last modification %s \n", modificationTime)); err != nil {
+		return err
+	}
+
+	// Write active jail bans
+	if len(cidrs) > 0 {
+		if _, err := file.WriteString("# Active jail bans:\n"); err != nil {
+			return err
+		}
+		for _, cidr := range cidrs {
+			if _, err := file.WriteString(cidr + "\n"); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Write manual blacklist entries
+	if len(blacklistCIDRs) > 0 {
+		if _, err := file.WriteString("# Manual blacklist entries:\n"); err != nil {
+			return err
+		}
+		for _, cidr := range blacklistCIDRs {
+			if _, err := file.WriteString(cidr + "\n"); err != nil {
+				return err
+			}
+		}
+		if _, err := file.WriteString("# End of manual blacklist\n"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

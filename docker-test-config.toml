@@ -1,0 +1,33 @@
+# cidrx Docker Configuration
+# This config is used by the Docker container for live mode testing
+# It's designed to detect the clustering patterns from the test clients
+
+[global]
+jailFile = "/data/jail.json"
+banFile = "/data/blocklist.txt"
+
+[live]
+port = "9000"
+
+[live.general_detection]
+# Detect net1 (4 IPs: 172.16.1.32-35)
+# Detect net2 (2 IPs: 172.16.2.32-33)
+# Detect net3 (5 IPs: 172.16.3.32-36)
+slidingWindowMaxTime = "5m"
+slidingWindowMaxSize = 10000
+sleepBetweenIterations = 5
+clusterArgSets = [
+    [2, 24, 32, 0.2],   # Detect small clusters (2+ IPs)
+]
+useForJail = [true]
+
+[live.aggressive_detection]
+# Detect net4 (33 IPs: 172.16.16.32-64) - the main attack cluster
+slidingWindowMaxTime = "2m"
+slidingWindowMaxSize = 5000
+sleepBetweenIterations = 3
+clusterArgSets = [
+    [10, 20, 28, 0.15], # Detect medium clusters (10+ IPs)
+    [20, 16, 24, 0.2],  # Detect larger networks (20+ IPs)
+]
+useForJail = [true, true]

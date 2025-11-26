@@ -1,0 +1,1147 @@
+package cidr
+
+import (
+	"fmt"
+	"net"
+	"testing"
+)
+
+func TestRemoveWhitelistedLargeScale(t *testing.T) {
+	// Generate large blacklist
+	blacklist := make([]string, 0, 10000)
+	for i := 0; i < 100; i++ {
+		for j := 0; j < 100; j++ {
+			blacklist = append(blacklist, fmt.Sprintf("10.%d.%d.0/24", i, j))
+		}
+	}
+
+	// Generate whitelist that covers some ranges
+	whitelist := []string{
+		"10.0.0.0/16",  // Covers 10.0.x.x
+		"10.50.0.0/16", // Covers 10.50.x.x
+	}
+
+	result := RemoveWhitelisted(blacklist, whitelist)
+
+	// Should have removed entries covered by whitelist
+	expectedRemoved := 200 // 100 entries for 10.0.x.x + 100 entries for 10.50.x.x
+	expectedRemaining := len(blacklist) - expectedRemoved
+
+	if len(result) != expectedRemaining {
+		t.Errorf("Expected %d remaining entries, got %d", expectedRemaining, len(result))
+	}
+
+	// Verify none of the remaining entries are whitelisted
+	for _, cidr := range result {
+		if IsWhitelisted(cidr, whitelist) {
+			t.Errorf("Found whitelisted CIDR in result: %s", cidr)
+		}
+	}
+
+	// Verify that some specific entries were removed
+	removedEntries := []string{"10.0.0.0/24", "10.0.50.0/24", "10.50.0.0/24", "10.50.99.0/24"}
+	for _, removed := range removedEntries {
+		for _, remaining := range result {
+			if remaining == removed {
+				t.Errorf("Expected CIDR %s to be removed but it's still present", removed)
+			}
+		}
+	}
+}
+
+func TestIsWhitelisted(t *testing.T) {
+	tests := []struct {
+		name      string
+		cidr      string
+		whitelist []string
+		expected  bool
+	}{
+		{
+			name:      "Empty whitelist",
+			cidr:      "192.168.1.0/24",
+			whitelist: []string{},
+			expected:  false,
+		},
+		{
+			name:      "Exact match",
+			cidr:      "192.168.1.0/24",
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "Subnet contained in whitelist",
+			cidr:      "192.168.1.128/25",
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "Supernet not contained in smaller whitelist",
+			cidr:      "192.168.0.0/16",
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  false,
+		},
+		{
+			name:      "Multiple whitelist entries - first matches",
+			cidr:      "10.0.0.0/24",
+			whitelist: []string{"10.0.0.0/24", "192.168.1.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "Multiple whitelist entries - second matches",
+			cidr:      "192.168.1.128/25",
+			whitelist: []string{"10.0.0.0/24", "192.168.1.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "No match in multiple entries",
+			cidr:      "172.16.1.0/24",
+			whitelist: []string{"10.0.0.0/24", "192.168.1.0/24"},
+			expected:  false,
+		},
+		{
+			name:      "Adjacent but not overlapping",
+			cidr:      "192.168.2.0/24",
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  false,
+		},
+		{
+			name:      "Invalid CIDR in candidate",
+			cidr:      "invalid-cidr",
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  false,
+		},
+		{
+			name:      "Invalid CIDR in whitelist",
+			cidr:      "192.168.1.0/24",
+			whitelist: []string{"invalid-cidr", "192.168.1.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "Large whitelist network contains smaller candidate",
+			cidr:      "192.168.100.64/26",
+			whitelist: []string{"192.168.0.0/16"},
+			expected:  true,
+		},
+		{
+			name:      "Single IP contained in subnet",
+			cidr:      "10.0.0.1/32",
+			whitelist: []string{"10.0.0.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "Single IP not contained",
+			cidr:      "10.0.1.1/32",
+			whitelist: []string{"10.0.0.0/24"},
+			expected:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsWhitelisted(tt.cidr, tt.whitelist)
+			if result != tt.expected {
+				t.Errorf("cidr.IsWhitelisted(%q, %v) = %v, want %v", tt.cidr, tt.whitelist, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRemoveWhitelisted(t *testing.T) {
+	tests := []struct {
+		name      string
+		blacklist []string
+		whitelist []string
+		expected  []string
+	}{
+		{
+			name:      "Empty lists",
+			blacklist: []string{},
+			whitelist: []string{},
+			expected:  []string{},
+		},
+		{
+			name:      "Empty whitelist",
+			blacklist: []string{"192.168.1.0/24", "10.0.0.0/24"},
+			whitelist: []string{},
+			expected:  []string{"192.168.1.0/24", "10.0.0.0/24"},
+		},
+		{
+			name:      "Empty blacklist",
+			blacklist: []string{},
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  []string{},
+		},
+		{
+			name:      "No matches",
+			blacklist: []string{"172.16.1.0/24", "10.0.0.0/24"},
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  []string{"172.16.1.0/24", "10.0.0.0/24"},
+		},
+		{
+			name:      "Single exact match removed",
+			blacklist: []string{"192.168.1.0/24", "10.0.0.0/24"},
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  []string{"10.0.0.0/24"},
+		},
+		{
+			name:      "All blacklisted removed",
+			blacklist: []string{"192.168.1.0/24", "192.168.2.0/24"},
+			whitelist: []string{"192.168.0.0/16"},
+			expected:  []string{},
+		},
+		{
+			name:      "Partial removal",
+			blacklist: []string{"192.168.1.0/24", "10.0.0.0/24", "172.16.1.0/24"},
+			whitelist: []string{"192.168.0.0/16", "172.16.0.0/16"},
+			expected:  []string{"10.0.0.0/24"},
+		},
+		{
+			name:      "Subnet removed by larger whitelist",
+			blacklist: []string{"192.168.1.128/25", "192.168.1.64/26", "10.0.0.0/24"},
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  []string{"10.0.0.0/24"},
+		},
+		{
+			name:      "Multiple whitelist entries",
+			blacklist: []string{"192.168.1.0/24", "10.0.0.0/24", "172.16.1.0/24", "203.0.113.0/24"},
+			whitelist: []string{"192.168.0.0/16", "10.0.0.0/8", "203.0.113.0/24"},
+			expected:  []string{"172.16.1.0/24"},
+		},
+		{
+			name:      "Single IP whitelist",
+			blacklist: []string{"192.168.1.1/32", "192.168.1.2/32", "10.0.0.1/32"},
+			whitelist: []string{"192.168.1.1/32"},
+			expected:  []string{"192.168.1.2/32", "10.0.0.1/32"},
+		},
+		{
+			name: "Complex overlapping scenario",
+			blacklist: []string{
+				"192.168.1.0/25",   // First half of /24
+				"192.168.1.128/25", // Second half of /24
+				"192.168.2.0/24",   // Different /24
+				"10.0.0.0/24",      // Different network
+			},
+			whitelist: []string{"192.168.0.0/16"}, // Covers both .1.x networks
+			expected:  []string{"10.0.0.0/24"},
+		},
+		{
+			name: "Complex overlapping scenario single IP",
+			blacklist: []string{
+				"192.168.1.0/24", // Whole /24 – we’ll subtract the whitelisted IP
+				"10.0.0.0/24",    // Independent network
+			},
+			whitelist: []string{
+				"192.168.1.201/32", // One host we must allow
+			},
+			expected: []string{
+				// 10.0.0.0/24 is unaffected
+				"10.0.0.0/24",
+
+				// 192.168.1.0/24 with 192.168.1.201 removed,
+				// expressed as the minimal, non-overlapping CIDRs:
+				"192.168.1.0/25",   // 192.168.1.0   – 192.168.1.127
+				"192.168.1.128/26", // 192.168.1.128 – 192.168.1.191
+				"192.168.1.192/29", // 192.168.1.192 – 192.168.1.199
+				"192.168.1.200/32", // 192.168.1.200
+				"192.168.1.202/31", // 192.168.1.202 – 192.168.1.203
+				"192.168.1.204/30", // 192.168.1.204 – 192.168.1.207
+				"192.168.1.208/28", // 192.168.1.208 – 192.168.1.223
+				"192.168.1.224/27", // 192.168.1.224 – 192.168.1.255
+			},
+		},
+		{
+			name:      "Multiple single IP exclusions from same network",
+			blacklist: []string{"172.16.1.0/24", "10.0.0.0/8"},
+			whitelist: []string{
+				"172.16.1.1/32",   // Exclude first host
+				"172.16.1.254/32", // Exclude last host
+				"172.16.1.128/32", // Exclude middle host
+			},
+			expected: []string{
+				"10.0.0.0/8", // Unchanged network
+				// 172.16.1.0/24 with three IPs excluded (.1, .128, .254):
+				"172.16.1.0/32",   // Just .0
+				"172.16.1.2/31",   // .2-.3
+				"172.16.1.4/30",   // .4-.7
+				"172.16.1.8/29",   // .8-.15
+				"172.16.1.16/28",  // .16-.31
+				"172.16.1.32/27",  // .32-.63
+				"172.16.1.64/26",  // .64-.127
+				"172.16.1.129/32", // Just .129
+				"172.16.1.130/31", // .130-.131
+				"172.16.1.132/30", // .132-.135
+				"172.16.1.136/29", // .136-.143
+				"172.16.1.144/28", // .144-.159
+				"172.16.1.160/27", // .160-.191
+				"172.16.1.192/27", // .192-.223
+				"172.16.1.224/28", // .224-.239
+				"172.16.1.240/29", // .240-.247
+				"172.16.1.248/30", // .248-.251
+				"172.16.1.252/31", // .252-.253
+				"172.16.1.255/32", // Just .255
+			},
+		},
+		{
+			name:      "Exclude /25 subnet from /24 network",
+			blacklist: []string{"203.0.113.0/24"},
+			whitelist: []string{"203.0.113.128/25"}, // Second half
+			expected: []string{
+				"203.0.113.0/25", // First half remains
+			},
+		},
+		{
+			name:      "Exclude /26 subnet from middle of /24",
+			blacklist: []string{"198.51.100.0/24"},
+			whitelist: []string{"198.51.100.64/26"}, // .64-.127
+			expected: []string{
+				"198.51.100.0/26",   // .0-.63
+				"198.51.100.128/25", // .128-.255
+			},
+		},
+		{
+			name: "Complex multi-network with overlapping exclusions",
+			blacklist: []string{
+				"10.1.0.0/16", // Large network
+				"10.2.0.0/24", // Smaller network
+				"192.168.0.0/24",
+			},
+			whitelist: []string{
+				"10.1.1.0/24",    // Hole in large network
+				"10.1.2.128/25",  // Another hole in large network
+				"10.2.0.100/32",  // Single IP from smaller network
+				"192.168.0.0/26", // Quarter of the /24
+			},
+			expected: []string{
+				// 10.1.0.0/16 with holes:
+				"10.1.0.0/24",   // .0.x
+				"10.1.2.0/25",   // .2.0-.2.127 (excluding .2.128/25)
+				"10.1.3.0/24",   // .3.x
+				"10.1.4.0/22",   // .4.x - .7.x
+				"10.1.8.0/21",   // .8.x - .15.x
+				"10.1.16.0/20",  // .16.x - .31.x
+				"10.1.32.0/19",  // .32.x - .63.x
+				"10.1.64.0/18",  // .64.x - .127.x
+				"10.1.128.0/17", // .128.x - .255.x
+
+				// 10.2.0.0/24 with one IP excluded:
+				"10.2.0.0/26",   // .0-.63
+				"10.2.0.64/27",  // .64-.95
+				"10.2.0.96/30",  // .96-.99
+				"10.2.0.101/32", // .101
+				"10.2.0.102/31", // .102-.103
+				"10.2.0.104/29", // .104-.111
+				"10.2.0.112/28", // .112-.127
+				"10.2.0.128/25", // .128-.255
+
+				// 192.168.0.0/24 with first quarter excluded:
+				"192.168.0.64/26",  // .64-.127
+				"192.168.0.128/25", // .128-.255
+			},
+		},
+		{
+			name:      "Edge case: exclude first and last IP from /30",
+			blacklist: []string{"172.20.1.0/30"}, // Just 4 IPs: .0, .1, .2, .3
+			whitelist: []string{
+				"172.20.1.0/32", // Network address
+				"172.20.1.3/32", // Broadcast address
+			},
+			expected: []string{
+				"172.20.1.1/32", // Just .1
+				"172.20.1.2/32", // Just .2
+			},
+		},
+		{
+			name:      "Exclude middle /28 from /26",
+			blacklist: []string{"10.0.100.0/26"},  // .0-.63
+			whitelist: []string{"10.0.100.16/28"}, // .16-.31
+			expected: []string{
+				"10.0.100.0/28",  // .0-.15
+				"10.0.100.32/27", // .32-.63
+			},
+		},
+		{
+			name:      "Multiple non-contiguous subnet exclusions",
+			blacklist: []string{"172.31.0.0/22"}, // .0.0 - .3.255
+			whitelist: []string{
+				"172.31.1.0/24", // Exclude .1.x
+				"172.31.3.0/24", // Exclude .3.x
+			},
+			expected: []string{
+				"172.31.0.0/24", // .0.x remains
+				"172.31.2.0/24", // .2.x remains
+			},
+		},
+		{
+			name: "Cascading exclusions - whitelist larger than individual blacklist items",
+			blacklist: []string{
+				"192.168.1.0/25",   // .0-.127
+				"192.168.1.128/26", // .128-.191
+				"192.168.1.192/27", // .192-.223
+			},
+			whitelist: []string{
+				"192.168.1.0/24", // Covers all blacklist items
+			},
+			expected: []string{}, // All should be removed
+		},
+		{
+			name:      "Invalid CIDRs handled gracefully",
+			blacklist: []string{"invalid-cidr", "192.168.1.0/24", "10.0.0.0/24"},
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  []string{"invalid-cidr", "10.0.0.0/24"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := RemoveWhitelisted(tt.blacklist, tt.whitelist)
+
+			// Check length
+			if len(result) != len(tt.expected) {
+				t.Errorf("cidr.RemoveWhitelisted() returned %d items, want %d\nGot: %v\nWant: %v",
+					len(result), len(tt.expected), result, tt.expected)
+				return
+			}
+
+			// Check each expected item is present
+			for _, expectedCidr := range tt.expected {
+				found := false
+				for _, resultCidr := range result {
+					if resultCidr == expectedCidr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected CIDR %q not found in result %v", expectedCidr, result)
+				}
+			}
+
+			// Check no unexpected items are present
+			for _, resultCidr := range result {
+				found := false
+				for _, expectedCidr := range tt.expected {
+					if resultCidr == expectedCidr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Unexpected CIDR %q found in result %v", resultCidr, result)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeCidrs(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+		wantErr  bool
+	}{
+		{
+			name:     "Empty input",
+			input:    []string{},
+			expected: []string{},
+			wantErr:  false,
+		},
+		{
+			name:     "Single CIDR",
+			input:    []string{"192.168.1.0/24"},
+			expected: []string{"192.168.1.0/24"},
+			wantErr:  false,
+		},
+		{
+			name: "Non-overlapping CIDRs",
+			input: []string{
+				"192.168.1.2/32",
+				"192.168.1.3/32",
+			},
+			expected: []string{
+				"192.168.1.2/31",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Overlapping CIDRs",
+			input: []string{
+				"10.0.0.0/24",
+				"10.0.0.128/25",
+			},
+			expected: []string{
+				"10.0.0.0/24",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Adjacent CIDRs",
+			input: []string{
+				"172.16.0.0/24",
+				"172.16.1.0/24",
+			},
+			expected: []string{
+				"172.16.0.0/23",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Multiple mergeable CIDRs",
+			input: []string{
+				"192.168.0.0/24",
+				"192.168.1.0/24",
+				"192.168.2.0/24",
+				"192.168.3.0/24",
+			},
+			expected: []string{
+				"192.168.0.0/22",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Mixed mergeable and non-mergeable",
+			input: []string{
+				"10.0.0.0/24",
+				"10.0.1.0/24",
+				"10.0.2.0/24",
+			},
+			expected: []string{
+				"10.0.0.0/23",
+				"10.0.2.0/24",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid CIDR",
+			input: []string{
+				"not-a-cidr",
+			},
+			expected: nil,
+			wantErr:  true,
+		},
+		{
+			name: "Overlapping and adjacent",
+			input: []string{
+				"192.168.1.0/25",
+				"192.168.1.128/25",
+				"192.168.2.0/24",
+			},
+			expected: []string{
+				"192.168.1.0/24",
+				"192.168.2.0/24",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Already merged",
+			input: []string{
+				"10.0.0.0/8",
+				"10.0.0.0/9",
+			},
+			expected: []string{
+				"10.0.0.0/8",
+			},
+			wantErr: false,
+		},
+	}
+
+	normalize := func(cidrs []string) map[string]struct{} {
+		m := make(map[string]struct{})
+		for _, c := range cidrs {
+			m[c] = struct{}{}
+		}
+		return m
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Merge(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			gotMap := normalize(got)
+			expMap := normalize(tt.expected)
+			if len(gotMap) != len(expMap) {
+				t.Errorf("expected %v, got %v", tt.expected, got)
+			}
+			for cidr := range expMap {
+				if _, ok := gotMap[cidr]; !ok {
+					t.Errorf("expected CIDR %s in result, got %v", cidr, got)
+				}
+			}
+		})
+	}
+}
+
+// TestMergeIPNets tests the IPNet-native merge function
+func TestMergeIPNets(t *testing.T) {
+	tests := []struct {
+		name     string
+		cidrs    []string
+		expected []string
+	}{
+		{
+			name:     "No merging needed",
+			cidrs:    []string{"192.168.1.0/24", "10.0.0.0/24"},
+			expected: []string{"10.0.0.0/24", "192.168.1.0/24"},
+		},
+		{
+			name:     "Adjacent networks",
+			cidrs:    []string{"192.168.0.0/24", "192.168.1.0/24"},
+			expected: []string{"192.168.0.0/23"},
+		},
+		{
+			name:     "Contained networks",
+			cidrs:    []string{"192.168.0.0/16", "192.168.1.0/24"},
+			expected: []string{"192.168.0.0/16"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse input CIDRs to IPNets
+			ipNets, err := StringsToIPNets(tt.cidrs)
+			if err != nil {
+				t.Fatalf("Failed to parse CIDRs: %v", err)
+			}
+
+			// Test IPNet version
+			mergedIPNets := MergeIPNets(ipNets)
+
+			// Convert back to strings for comparison
+			var gotStrings []string
+			for _, ipNet := range mergedIPNets {
+				gotStrings = append(gotStrings, ipNet.String())
+			}
+
+			// Test string version for comparison
+			expectedMerged, err := Merge(tt.cidrs)
+			if err != nil {
+				t.Fatalf("String Merge failed: %v", err)
+			}
+
+			// Verify they produce the same results
+			normalize := func(cidrs []string) map[string]struct{} {
+				m := make(map[string]struct{})
+				for _, c := range cidrs {
+					m[c] = struct{}{}
+				}
+				return m
+			}
+			gotMap := normalize(gotStrings)
+			expMap := normalize(expectedMerged)
+
+			if len(gotMap) != len(expMap) {
+				t.Errorf("MergeIPNets result differs from Merge: got %v, expected %v", gotStrings, expectedMerged)
+			}
+			for cidr := range expMap {
+				if _, ok := gotMap[cidr]; !ok {
+					t.Errorf("Expected CIDR %s in MergeIPNets result, got %v", cidr, gotStrings)
+				}
+			}
+		})
+	}
+}
+
+// TestIsWhitelistedIPNet tests the IPNet-native whitelist checking
+func TestIsWhitelistedIPNet(t *testing.T) {
+	tests := []struct {
+		name      string
+		candidate string
+		whitelist []string
+		expected  bool
+	}{
+		{
+			name:      "Exact match",
+			candidate: "192.168.1.0/24",
+			whitelist: []string{"192.168.1.0/24"},
+			expected:  true,
+		},
+		{
+			name:      "Contained in larger network",
+			candidate: "192.168.1.0/24",
+			whitelist: []string{"192.168.0.0/16"},
+			expected:  true,
+		},
+		{
+			name:      "Not whitelisted",
+			candidate: "10.0.0.0/24",
+			whitelist: []string{"192.168.0.0/16"},
+			expected:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse candidate and whitelist to IPNets
+			_, candidateNet, err := net.ParseCIDR(tt.candidate)
+			if err != nil {
+				t.Fatalf("Failed to parse candidate CIDR: %v", err)
+			}
+
+			whitelistNets, err := StringsToIPNets(tt.whitelist)
+			if err != nil {
+				t.Fatalf("Failed to parse whitelist CIDRs: %v", err)
+			}
+
+			// Test IPNet version
+			gotIPNet := IsWhitelistedIPNet(candidateNet, whitelistNets)
+			if gotIPNet != tt.expected {
+				t.Errorf("IsWhitelistedIPNet(%s, %v) = %v, want %v", tt.candidate, tt.whitelist, gotIPNet, tt.expected)
+			}
+
+			// Verify it matches string version
+			gotString := IsWhitelisted(tt.candidate, tt.whitelist)
+			if gotIPNet != gotString {
+				t.Errorf("IsWhitelistedIPNet(%v) != IsWhitelisted(%v) for candidate %s", gotIPNet, gotString, tt.candidate)
+			}
+		})
+	}
+}
+
+// BenchmarkMergeComparison compares string vs IPNet merge performance
+func BenchmarkMergeComparison(b *testing.B) {
+	// Generate test CIDRs
+	cidrs := make([]string, 100)
+	for i := 0; i < 100; i++ {
+		cidrs[i] = fmt.Sprintf("192.168.%d.0/24", i)
+	}
+
+	// Pre-parse for IPNet version
+	ipNets, _ := StringsToIPNets(cidrs)
+
+	b.Run("Merge_String", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = Merge(cidrs)
+		}
+	})
+
+	b.Run("MergeIPNets", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = MergeIPNets(ipNets)
+		}
+	})
+}
+
+// BenchmarkIsWhitelistedComparison compares string vs IPNet whitelist performance
+func BenchmarkIsWhitelistedComparison(b *testing.B) {
+	candidate := "192.168.50.0/24"
+	whitelist := make([]string, 50)
+	for i := 0; i < 50; i++ {
+		whitelist[i] = fmt.Sprintf("10.%d.0.0/16", i)
+	}
+
+	// Pre-parse for IPNet version
+	_, candidateNet, _ := net.ParseCIDR(candidate)
+	whitelistNets, _ := StringsToIPNets(whitelist)
+
+	b.Run("IsWhitelisted_String", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = IsWhitelisted(candidate, whitelist)
+		}
+	})
+
+	b.Run("IsWhitelistedIPNet", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = IsWhitelistedIPNet(candidateNet, whitelistNets)
+		}
+	})
+}
+
+// TestNewUserAgentMatcher tests the creation of a new UserAgentMatcher
+func TestNewUserAgentMatcher(t *testing.T) {
+	whitelist := []string{"Mozilla/5.0", "Googlebot/2.1", "# comment", "", "  "}
+	blacklist := []string{"sqlmap/1.0", "nmap", "# another comment", "", "  "}
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	if matcher == nil {
+		t.Fatal("Expected non-nil matcher")
+	}
+
+	// Should have 4 entries (2 whitelist + 2 blacklist, comments and empty strings ignored)
+	expectedCount := 4
+	if matcher.Count() != expectedCount {
+		t.Errorf("Expected %d entries, got %d", expectedCount, matcher.Count())
+	}
+
+	// Check whitelist count
+	if matcher.CountWhitelist() != 2 {
+		t.Errorf("Expected 2 whitelist entries, got %d", matcher.CountWhitelist())
+	}
+
+	// Check blacklist count
+	if matcher.CountBlacklist() != 2 {
+		t.Errorf("Expected 2 blacklist entries, got %d", matcher.CountBlacklist())
+	}
+}
+
+// TestUserAgentMatcher_WhitelistPrecedence tests that whitelist takes precedence over blacklist
+func TestUserAgentMatcher_WhitelistPrecedence(t *testing.T) {
+	whitelist := []string{"Mozilla/5.0"}
+	blacklist := []string{"Mozilla/5.0"} // Same pattern in both lists
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	// Whitelist should win
+	result := matcher.CheckUserAgent("Mozilla/5.0")
+	if result != UserAgentWhitelist {
+		t.Errorf("Expected UserAgentWhitelist, got %v", result)
+	}
+
+	if !matcher.IsWhitelisted("Mozilla/5.0") {
+		t.Error("Expected Mozilla/5.0 to be whitelisted")
+	}
+
+	if matcher.IsBlacklisted("Mozilla/5.0") {
+		t.Error("Expected Mozilla/5.0 to not be blacklisted (whitelist should win)")
+	}
+}
+
+// TestUserAgentMatcher_ExactMatch tests exact string matching
+func TestUserAgentMatcher_ExactMatch(t *testing.T) {
+	whitelist := []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+	blacklist := []string{"sqlmap/1.0"}
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	tests := []struct {
+		userAgent string
+		expected  UserAgentMatchResult
+	}{
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64)", UserAgentWhitelist},
+		{"mozilla/5.0 (windows nt 10.0; win64; x64)", UserAgentWhitelist},       // Case insensitive
+		{"MOZILLA/5.0 (WINDOWS NT 10.0; WIN64; X64)", UserAgentWhitelist},       // Case insensitive
+		{"Mozilla/5.0", UserAgentNotListed},                                     // Partial match should not work
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Extra", UserAgentNotListed}, // Extra content should not match
+		{"sqlmap/1.0", UserAgentBlacklist},
+		{"SQLMAP/1.0", UserAgentBlacklist}, // Case insensitive
+		{"sqlmap/1.1", UserAgentNotListed}, // Different version should not match
+		{"Unknown Agent", UserAgentNotListed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.userAgent, func(t *testing.T) {
+			result := matcher.CheckUserAgent(tt.userAgent)
+			if result != tt.expected {
+				t.Errorf("CheckUserAgent(%q) = %v, want %v", tt.userAgent, result, tt.expected)
+			}
+
+			// Test convenience methods
+			expectedWhitelisted := (tt.expected == UserAgentWhitelist)
+			expectedBlacklisted := (tt.expected == UserAgentBlacklist)
+
+			if matcher.IsWhitelisted(tt.userAgent) != expectedWhitelisted {
+				t.Errorf("IsWhitelisted(%q) = %v, want %v", tt.userAgent, matcher.IsWhitelisted(tt.userAgent), expectedWhitelisted)
+			}
+
+			if matcher.IsBlacklisted(tt.userAgent) != expectedBlacklisted {
+				t.Errorf("IsBlacklisted(%q) = %v, want %v", tt.userAgent, matcher.IsBlacklisted(tt.userAgent), expectedBlacklisted)
+			}
+		})
+	}
+}
+
+// TestUserAgentMatcher_EmptyLists tests behavior with empty lists
+func TestUserAgentMatcher_EmptyLists(t *testing.T) {
+	tests := []struct {
+		name      string
+		whitelist []string
+		blacklist []string
+	}{
+		{"Both empty", []string{}, []string{}},
+		{"Whitelist empty", []string{}, []string{"test"}},
+		{"Blacklist empty", []string{"test"}, []string{}},
+		{"Both nil", nil, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := NewUserAgentMatcher(tt.whitelist, tt.blacklist)
+
+			result := matcher.CheckUserAgent("test")
+			if len(tt.blacklist) > 0 && tt.blacklist[0] == "test" {
+				if result != UserAgentBlacklist {
+					t.Errorf("Expected UserAgentBlacklist, got %v", result)
+				}
+			} else if len(tt.whitelist) > 0 && tt.whitelist[0] == "test" {
+				if result != UserAgentWhitelist {
+					t.Errorf("Expected UserAgentWhitelist, got %v", result)
+				}
+			} else {
+				if result != UserAgentNotListed {
+					t.Errorf("Expected UserAgentNotListed, got %v", result)
+				}
+			}
+		})
+	}
+}
+
+// TestUserAgentMatcher_NilMatcher tests behavior with nil matcher
+func TestUserAgentMatcher_NilMatcher(t *testing.T) {
+	var matcher *UserAgentMatcher
+
+	if matcher.CheckUserAgent("test") != UserAgentNotListed {
+		t.Error("Nil matcher should return UserAgentNotListed")
+	}
+
+	if matcher.IsWhitelisted("test") {
+		t.Error("Nil matcher should return false for IsWhitelisted")
+	}
+
+	if matcher.IsBlacklisted("test") {
+		t.Error("Nil matcher should return false for IsBlacklisted")
+	}
+
+	if matcher.Count() != 0 {
+		t.Error("Nil matcher should return 0 for Count")
+	}
+
+	if matcher.CountWhitelist() != 0 {
+		t.Error("Nil matcher should return 0 for CountWhitelist")
+	}
+
+	if matcher.CountBlacklist() != 0 {
+		t.Error("Nil matcher should return 0 for CountBlacklist")
+	}
+}
+
+// TestUserAgentMatcher_LargeDataset tests performance with a large dataset
+func TestUserAgentMatcher_LargeDataset(t *testing.T) {
+	// Create large lists
+	whitelist := make([]string, 1000)
+	blacklist := make([]string, 1000)
+
+	for i := 0; i < 1000; i++ {
+		whitelist[i] = fmt.Sprintf("whitelist-agent-%d", i)
+		blacklist[i] = fmt.Sprintf("blacklist-agent-%d", i)
+	}
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	// Test lookup performance
+	testCases := []string{
+		"whitelist-agent-500", // Should be whitelisted
+		"blacklist-agent-500", // Should be blacklisted
+		"unknown-agent",       // Should not be listed
+	}
+
+	for _, userAgent := range testCases {
+		result := matcher.CheckUserAgent(userAgent)
+		// Just make sure it doesn't crash or hang
+		if result < UserAgentBlacklist || result > UserAgentWhitelist {
+			t.Errorf("Invalid result for %s: %v", userAgent, result)
+		}
+	}
+
+	// Verify counts
+	expectedTotal := 2000
+	if matcher.Count() != expectedTotal {
+		t.Errorf("Expected %d total entries, got %d", expectedTotal, matcher.Count())
+	}
+}
+
+// TestUserAgentMatcher_SpecialCharacters tests handling of special characters
+func TestUserAgentMatcher_SpecialCharacters(t *testing.T) {
+	whitelist := []string{
+		"Mozilla/5.0 (compatible; Test+Bot/1.0; +http://example.com)",
+		"Agent with spaces and (parentheses)",
+		"Agent-with-dashes_and_underscores",
+		"Agent.with.dots",
+		"Agent,with,commas",
+		"Agent;with;semicolons",
+		"Agent:with:colons",
+		"Agent\"with\"quotes",
+		"Agent'with'apostrophes",
+		"Agent[with]brackets",
+		"Agent{with}braces",
+		"Agent=with=equals",
+		"Agent?with?questions",
+		"Agent&with&ampersands",
+		"Agent%20with%20encoded",
+		"Agent|with|pipes",
+		"Agent\\with\\backslashes",
+		"Agent/with/slashes",
+		"Agent*with*asterisks",
+		"Agent#with#hashes",
+		"Agent@with@ats",
+		"Agent$with$dollars",
+		"Agent^with^carets",
+		"Agent~with~tildes",
+		"Agent`with`backticks",
+	}
+
+	blacklist := []string{
+		"sqlmap/1.0; (Attack Tool)",
+		"<script>alert('xss')</script>",
+		"../../etc/passwd",
+		"' OR 1=1 --",
+		"SELECT * FROM users",
+	}
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	// Test all whitelist entries
+	for _, userAgent := range whitelist {
+		if !matcher.IsWhitelisted(userAgent) {
+			t.Errorf("Expected %q to be whitelisted", userAgent)
+		}
+	}
+
+	// Test all blacklist entries
+	for _, userAgent := range blacklist {
+		if !matcher.IsBlacklisted(userAgent) {
+			t.Errorf("Expected %q to be blacklisted", userAgent)
+		}
+	}
+}
+
+// TestUserAgentMatcher_Unicode tests handling of Unicode characters
+func TestUserAgentMatcher_Unicode(t *testing.T) {
+	whitelist := []string{
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 测试浏览器",
+		"Agent with émojis 🤖🔍",
+		"Агент с кириллицей",
+		"エージェント with 日本語",
+		"Agent with العربية",
+	}
+
+	blacklist := []string{
+		"恶意代理 malicious",
+		"вредоносный агент",
+		"악성 에이전트",
+	}
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	// Test all entries
+	for _, userAgent := range whitelist {
+		if !matcher.IsWhitelisted(userAgent) {
+			t.Errorf("Expected %q to be whitelisted", userAgent)
+		}
+	}
+
+	for _, userAgent := range blacklist {
+		if !matcher.IsBlacklisted(userAgent) {
+			t.Errorf("Expected %q to be blacklisted", userAgent)
+		}
+	}
+
+	// Test case insensitive matching with Unicode
+	if !matcher.IsWhitelisted("MOZILLA/5.0 (MACINTOSH; INTEL MAC OS X 10_15_7) APPLEWEBKIT/537.36 测试浏览器") {
+		t.Error("Unicode case insensitive matching failed")
+	}
+}
+
+// TestLegacyCompatibility tests that legacy functions still work
+func TestLegacyCompatibility(t *testing.T) {
+	patterns := []string{"Mozilla/5.0", "Googlebot/2.1"}
+
+	// Test CompileUserAgentPatterns
+	matcher, err := CompileUserAgentPatterns(patterns)
+	if err != nil {
+		t.Fatalf("CompileUserAgentPatterns failed: %v", err)
+	}
+
+	if matcher == nil {
+		t.Fatal("Expected non-nil matcher from CompileUserAgentPatterns")
+	}
+
+	// Test CompileUserAgentSubstrings (alias)
+	matcher2, err := CompileUserAgentSubstrings(patterns)
+	if err != nil {
+		t.Fatalf("CompileUserAgentSubstrings failed: %v", err)
+	}
+
+	if matcher2 == nil {
+		t.Fatal("Expected non-nil matcher from CompileUserAgentSubstrings")
+	}
+
+	// Test IsUserAgentWhitelisted
+	if !IsUserAgentWhitelisted("Mozilla/5.0", patterns) {
+		t.Error("IsUserAgentWhitelisted should return true for Mozilla/5.0")
+	}
+
+	if IsUserAgentWhitelisted("sqlmap/1.0", patterns) {
+		t.Error("IsUserAgentWhitelisted should return false for sqlmap/1.0")
+	}
+
+	// Test IsUserAgentWhitelistedCompiled
+	if !IsUserAgentWhitelistedCompiled("Mozilla/5.0", matcher) {
+		t.Error("IsUserAgentWhitelistedCompiled should return true for Mozilla/5.0")
+	}
+
+	if IsUserAgentWhitelistedCompiled("sqlmap/1.0", matcher) {
+		t.Error("IsUserAgentWhitelistedCompiled should return false for sqlmap/1.0")
+	}
+}
+
+// TestUserAgentMatcher_CommentsAndWhitespace tests proper handling of comments and whitespace
+func TestUserAgentMatcher_CommentsAndWhitespace(t *testing.T) {
+	whitelist := []string{
+		"  Mozilla/5.0  ",   // Leading/trailing spaces
+		"\tGooglebot/2.1\t", // Leading/trailing tabs
+		"# This is a comment",
+		"",            // Empty string
+		"   ",         // Only whitespace
+		"Valid Agent", // Valid entry
+		"# Another comment",
+		"  # Comment with leading space",
+	}
+
+	blacklist := []string{
+		"  sqlmap/1.0  ", // Leading/trailing spaces
+		"# Comment",
+		"",
+		"nmap", // Valid entry
+	}
+
+	matcher := NewUserAgentMatcher(whitelist, blacklist)
+
+	// Should only have valid entries (3 whitelist + 2 blacklist)
+	expectedTotal := 5
+	if matcher.Count() != expectedTotal {
+		t.Errorf("Expected %d entries, got %d", expectedTotal, matcher.Count())
+	}
+
+	// Test that trimmed versions work
+	if !matcher.IsWhitelisted("Mozilla/5.0") {
+		t.Error("Expected Mozilla/5.0 to be whitelisted (trimmed)")
+	}
+
+	if !matcher.IsWhitelisted("Googlebot/2.1") {
+		t.Error("Expected Googlebot/2.1 to be whitelisted (trimmed)")
+	}
+
+	if !matcher.IsWhitelisted("Valid Agent") {
+		t.Error("Expected Valid Agent to be whitelisted")
+	}
+
+	if !matcher.IsBlacklisted("sqlmap/1.0") {
+		t.Error("Expected sqlmap/1.0 to be blacklisted (trimmed)")
+	}
+
+	if !matcher.IsBlacklisted("nmap") {
+		t.Error("Expected nmap to be blacklisted")
+	}
+
+	// Comments should not be in the matcher
+	if matcher.IsWhitelisted("# This is a comment") {
+		t.Error("Comments should not be added to matcher")
+	}
+
+	if matcher.IsBlacklisted("# Comment") {
+		t.Error("Comments should not be added to matcher")
+	}
+}

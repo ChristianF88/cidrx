@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, refactoring/* ]
+  pull_request:
+    branches: [ main, master ]
+
+# Cancel redundant runs on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.23.x'
+  # Keep builds reproducible and smaller
+  GOFLAGS: '-trimpath'
+
+jobs:
+  prepare:
+    name: Prepare (checkout + Go + deps)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true  # built-in module & build cache
+          cache-dependency-path: cidrx/src/go.sum
+
+      - name: Verify modules are tidy (no diff)
+        working-directory: ./cidrx/src
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Prime module cache
+        working-directory: ./cidrx/src
+        run: go mod download
+
+  lint:
+    name: Lint (fmt, vet, staticcheck)
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: cidrx/src/go.sum
+
+      - name: gofmt check
+        working-directory: ./cidrx/src
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Go files not formatted:"
+            echo "$UNFORMATTED"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        working-directory: ./cidrx/src
+        run: go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: staticcheck
+        working-directory: ./cidrx/src
+        run: staticcheck ./...
+
+  test:
+    name: Test (race + coverage)
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: cidrx/src/go.sum
+
+      - name: Run tests
+        working-directory: ./cidrx/src
+        run: go test -v -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ./cidrx/src/coverage.out
+          retention-days: 21
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./cidrx/src/coverage.out
+          flags: unittests
+          fail_ci_if_error: false
+
+  build:
+    name: Build (matrix)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux   # amd64
+            goarch: amd64
+            ext: ""
+          - goos: darwin  # amd64
+            goarch: amd64
+            ext: ""
+          - goos: darwin  # arm64
+            goarch: arm64
+            ext: ""
+          - goos: windows # amd64
+            goarch: amd64
+            ext: ".exe"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: cidrx/src/go.sum
+
+      - name: Build binary
+        working-directory: ./cidrx/src
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          OUT="cidrx-${GOOS}-${GOARCH}${{ matrix.ext }}"
+          go build -ldflags="-s -w" -o "$OUT" .
+          ls -lh "$OUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cidrx-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ./cidrx/src/cidrx-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          retention-days: 21
+

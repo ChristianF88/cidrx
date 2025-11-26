@@ -1,0 +1,4 @@
+# Overrides for development environment
+# Use this when running Hugo server locally
+baseurl = "http://localhost:1313/"
+canonifyURLs = false

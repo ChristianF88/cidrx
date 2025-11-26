@@ -1,0 +1,59 @@
+{{ define "main" }}
+<section class="section container-fluid mt-n3 pb-3">
+  <div class="row justify-content-center">
+    <div class="col-lg-12 text-center">
+      <h1>{{ .Title }}</h1>
+    </div>
+    <div class="col-lg-9 col-xl-8 text-center">
+      <p class="lead">{{ .Params.lead | safeHTML }}</p>
+      <a class="btn btn-primary btn-cta rounded-pill btn-lg my-3" href="{{ relURL "/docs/getting-started/introduction/" }}" role="button">Docs</a>
+      {{ .Content }}
+    </div>
+  </div>
+</section>
+{{ end }}
+
+{{ define "sidebar-prefooter" }}
+  {{ if site.Params.doks.backgroundDots -}}
+  <div class="d-flex justify-content-start">
+    <div class="bg-dots"></div>
+  </div>
+  {{ end -}}
+  {{ if eq $.Site.Language.LanguageName "English" }}
+  <section class="section section-md section-features">
+    <div class="container">
+      <div class="row justify-content-center text-center">
+        <div class="col-lg-5">
+          <h2 class="h4">Emergency Response</h2>
+          <p>Quickly identify misbehaving botnets and large crawlers. <a href="{{ relURL "/docs/usage/static-mode/" }}">Static mode guide →</a></p>
+        </div>
+        <div class="col-lg-5">
+          <h2 class="h4">Real-Time Protection</h2>
+          <p>Continuous monitoring with automatic IP banning. <a href="{{ relURL "/docs/usage/live-mode/" }}">Live mode guide →</a></p>
+        </div>
+        <div class="col-lg-5">
+          <h2 class="h4">Forensic Analysis</h2>
+          <p>Investigate historical attack patterns and time windows. <a href="{{ relURL "/docs/configuration/filtering/" }}">Filtering guide →</a></p>
+        </div>
+        <div class="col-lg-5">
+          <h2 class="h4">Scanner Detection</h2>
+          <p>Identify and block security scanners and bots. <a href="{{ relURL "/docs/configuration/clustering/" }}">Clustering guide →</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+  {{ end }}
+{{ end }}
+
+{{ define "sidebar-footer" }}
+{{ if site.Params.doks.sectionFooter -}}
+<section class="section section-md container-fluid bg-light">
+  <div class="row justify-content-center text-center">
+    <div class="col-lg-7">
+      <h2 class="mt-2">Start building with Doks today</h2>
+      <a class="btn btn-primary rounded-pill px-4 my-2" href="{{ relURL "/docs/getting-started/introduction/" }}" role="button">{{ i18n "get-started" }}</a>
+    </div>
+  </div>
+</section>
+{{ end -}}
+{{ end }}

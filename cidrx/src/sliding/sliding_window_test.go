@@ -1,0 +1,809 @@
+package sliding
+
+import (
+	"net"
+	"testing"
+	"time"
+
+	"github.com/ChristianF88/cidrx/iputils"
+	"github.com/alphadose/haxmap"
+)
+
+func TestSlidingWindowTrieInsert(t *testing.T) {
+	tests := []struct {
+		name          string
+		timedIPs      []TimedIp
+		expectedCount uint32
+	}{
+		{
+			name: "Insert single IP",
+			timedIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now()},
+			},
+			expectedCount: 1,
+		},
+		{
+			name: "Insert multiple unique IPs",
+			timedIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now()},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now()},
+			},
+			expectedCount: 2,
+		},
+		{
+			name: "Insert duplicate IPs",
+			timedIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now()},
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now()},
+			},
+			expectedCount: 2,
+		},
+		{
+			name:          "Insert no IPs",
+			timedIPs:      []TimedIp{},
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			window := 10 * time.Second
+			maxEntries := 5
+			swt := NewSlidingWindowTrie(window, maxEntries)
+
+			// Insert timed IPs
+			swt.InsertNew(tt.timedIPs)
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs are in the queue
+			if len(swt.IpQueue) != len(tt.timedIPs) {
+				t.Errorf("Expected queue length %d, got %d", len(tt.timedIPs), len(swt.IpQueue))
+			}
+		})
+	}
+}
+func TestSlidingWindowTrieCleanup(t *testing.T) {
+	tests := []struct {
+		name          string
+		timedIPs      []TimedIp
+		timeLimit     time.Duration
+		maxEntries    int
+		expectedCount uint32
+	}{
+		{
+			name: "Cleanup removes expired IPs",
+			timedIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-5 * time.Second)},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 1,
+		},
+		{
+			name: "Cleanup keeps all IPs within time limit",
+			timedIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-3 * time.Second)},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 2,
+		},
+		{
+			name: "Cleanup removes all IPs when all are expired",
+			timedIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-12 * time.Second)},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 0,
+		},
+		{
+			name:          "Cleanup with no IPs",
+			timedIPs:      []TimedIp{},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			swt := NewSlidingWindowTrie(tt.timeLimit, tt.maxEntries)
+
+			// Insert timed IPs
+			swt.InsertNew(tt.timedIPs)
+
+			// Perform cleanup
+			swt.DropOld()
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs in the queue
+			if len(swt.IpQueue) != int(tt.expectedCount) {
+				t.Errorf("Expected queue length %d, got %d", tt.expectedCount, len(swt.IpQueue))
+			}
+		})
+	}
+}
+func TestSlidingWindowTrieUpdate(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialIPs    []TimedIp
+		newIPs        []TimedIp
+		timeLimit     time.Duration
+		maxEntries    int
+		expectedCount uint32
+	}{
+		{
+			name: "Update adds new IPs and removes expired ones",
+			initialIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-5 * time.Second)},
+			},
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.3"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 2,
+		},
+		{
+			name: "Update keeps all valid IPs and adds new ones",
+			initialIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-3 * time.Second)},
+			},
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.3"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 3,
+		},
+		{
+			name: "Update removes all expired IPs and adds new ones",
+			initialIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-12 * time.Second)},
+			},
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.3"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 1,
+		},
+		{
+			name:          "Update with no initial or new IPs",
+			initialIPs:    []TimedIp{},
+			newIPs:        []TimedIp{},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			swt := NewSlidingWindowTrie(tt.timeLimit, tt.maxEntries)
+
+			// Insert initial IPs
+			swt.InsertNew(tt.initialIPs)
+
+			// Call Move with new IPs
+			swt.Update(tt.newIPs)
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs in the queue
+			if len(swt.IpQueue) != int(tt.expectedCount) {
+				t.Errorf("Expected queue length %d, got %d", tt.expectedCount, len(swt.IpQueue))
+			}
+		})
+	}
+}
+func TestSlidingWindowTrieUpdateOnlyInsert(t *testing.T) {
+	tests := []struct {
+		name          string
+		newIPs        []TimedIp
+		timeLimit     time.Duration
+		maxEntries    int
+		expectedCount uint32
+	}{
+		{
+			name: "Update inserts new IPs",
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now()},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 2,
+		},
+		{
+			name:          "Update with no IPs",
+			newIPs:        []TimedIp{},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			swt := NewSlidingWindowTrie(tt.timeLimit, tt.maxEntries)
+
+			// Call Update with new IPs
+			swt.Update(tt.newIPs)
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs in the queue
+			if len(swt.IpQueue) != int(tt.expectedCount) {
+				t.Errorf("Expected queue length %d, got %d", tt.expectedCount, len(swt.IpQueue))
+			}
+		})
+	}
+}
+
+func TestSlidingWindowTrieUpdateWithDifferentLengths(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialIPs    []TimedIp
+		newIPs        []TimedIp
+		timeLimit     time.Duration
+		maxEntries    int
+		expectedCount uint32
+	}{
+		{
+			name: "Update with more new IPs than initial",
+			initialIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+			},
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now()},
+				{Ip: net.ParseIP("192.168.1.3"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 3,
+		},
+		{
+			name: "Update with fewer new IPs than initial",
+			initialIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-3 * time.Second)},
+			},
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.3"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 3,
+		},
+		{
+			name: "Update with equal number of initial and new IPs",
+			initialIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+			},
+			newIPs: []TimedIp{
+				{Ip: net.ParseIP("192.168.1.2"), Time: time.Now()},
+			},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			swt := NewSlidingWindowTrie(tt.timeLimit, tt.maxEntries)
+
+			swt.Update(tt.initialIPs)
+			swt.Update(tt.newIPs)
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs in the queue
+			if len(swt.IpQueue) != int(tt.expectedCount) {
+				t.Errorf("Expected queue length %d, got %d", tt.expectedCount, len(swt.IpQueue))
+			}
+		})
+	}
+}
+
+func TestSlidingWindowTrieMaxLength(t *testing.T) {
+	timeIPs := []TimedIp{
+		{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-25 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-20 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.3"), Time: time.Now().Add(-15 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.4"), Time: time.Now().Add(-10 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.5"), Time: time.Now().Add(-5 * time.Second)},
+	}
+	tests := []struct {
+		name          string
+		timedIPs      []TimedIp
+		timeLimit     time.Duration
+		maxEntries    int
+		expectedCount uint32
+	}{
+		{
+			name:          "Max entries limit is respected",
+			timedIPs:      timeIPs,
+			timeLimit:     120 * time.Second,
+			maxEntries:    2,
+			expectedCount: 2,
+		},
+		{
+			name:          "Max entries limit with no IPs",
+			timedIPs:      []TimedIp{},
+			timeLimit:     10 * time.Second,
+			maxEntries:    5,
+			expectedCount: 0,
+		},
+		{
+			name:          "Max entries limit with fewer IPs than max",
+			timedIPs:      timeIPs,
+			timeLimit:     120 * time.Second,
+			maxEntries:    10,
+			expectedCount: 5,
+		},
+		{
+			name:          "Max entries limit with exactly max entries",
+			timedIPs:      timeIPs,
+			timeLimit:     120 * time.Second,
+			maxEntries:    5,
+			expectedCount: 5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			swt := NewSlidingWindowTrie(tt.timeLimit, tt.maxEntries)
+
+			// Insert timed IPs
+			swt.InsertNew(tt.timedIPs)
+
+			// Perform cleanup
+			swt.DropOld()
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs in the queue
+			if len(swt.IpQueue) != int(tt.expectedCount) {
+				t.Errorf("Expected queue length %d, got %d", tt.expectedCount, len(swt.IpQueue))
+			}
+		})
+	}
+}
+
+func TestSlidingWindowTrieMaxLengthAndTimeLimitAreEnforced(t *testing.T) {
+	timeIPs := []TimedIp{
+		{Ip: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-25 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-20 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.3"), Time: time.Now().Add(-15 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.4"), Time: time.Now().Add(-10 * time.Second)},
+		{Ip: net.ParseIP("192.168.1.5"), Time: time.Now().Add(-5 * time.Second)},
+	}
+	tests := []struct {
+		name          string
+		timedIPs      []TimedIp
+		timeLimit     time.Duration
+		maxEntries    int
+		expectedCount uint32
+	}{
+		{
+			name:          "Time limit is enforced",
+			timedIPs:      timeIPs,
+			timeLimit:     12 * time.Second,
+			maxEntries:    5,
+			expectedCount: 2,
+		},
+		{
+			name:          "Time limit with no IPs",
+			timedIPs:      []TimedIp{},
+			timeLimit:     12 * time.Second,
+			maxEntries:    3,
+			expectedCount: 0,
+		},
+
+		{
+			name:          "Max entries is enforced",
+			timedIPs:      timeIPs,
+			timeLimit:     120 * time.Second,
+			maxEntries:    2,
+			expectedCount: 2,
+		},
+		{
+			name:          "Max entries with no IPs",
+			timedIPs:      []TimedIp{},
+			timeLimit:     120 * time.Second,
+			maxEntries:    5,
+			expectedCount: 0,
+		},
+		{
+			name:          "Both are enforced, first by time limit then by max entries",
+			timedIPs:      timeIPs,
+			timeLimit:     12 * time.Second,
+			maxEntries:    1,
+			expectedCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Initialize a new SlidingWindowTrie
+			swt := NewSlidingWindowTrie(tt.timeLimit, tt.maxEntries)
+
+			// Insert timed IPs and Cleanup
+			swt.Update(tt.timedIPs)
+
+			// Verify the total count of IPs in the Trie
+			totalCount := swt.Trie.CountAll()
+			if totalCount != tt.expectedCount {
+				t.Errorf("Expected total count %d, got %d", tt.expectedCount, totalCount)
+			}
+
+			// Verify the IPs in the queue
+			if len(swt.IpQueue) != int(tt.expectedCount) {
+				t.Errorf("Expected queue length %d, got %d", tt.expectedCount, len(swt.IpQueue))
+			}
+		})
+	}
+}
+func TestInsertIntoHaxmap(t *testing.T) {
+	now := time.Now()
+	ip1 := net.ParseIP("192.168.1.1")
+	ip2 := net.ParseIP("192.168.1.2")
+
+	t.Run("Insert new IP", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		ti := TimedIp{
+			Ip:               ip1,
+			EndpointAllowed:  true,
+			UserAgentAllowed: false,
+			Time:             now,
+		}
+		insertIntoHaxmap(m, ip1, ti)
+		ipUint32 := iputils.IPToUint32(ip1)
+		stat, exists := m.Get(ipUint32)
+		if !exists {
+			t.Fatalf("Expected IP stat to exist after insert")
+		}
+		if stat.Count != 1 {
+			t.Errorf("Expected count 1, got %d", stat.Count)
+		}
+		if stat.Last != now {
+			t.Errorf("Expected Last to be %v, got %v", now, stat.Last)
+		}
+		if len(stat.DeltaT) != 0 {
+			t.Errorf("Expected DeltaT to be empty, got %v", stat.DeltaT)
+		}
+		if len(stat.EndpointsAllowed) != 1 || stat.EndpointsAllowed[0] != true {
+			t.Errorf("Expected EndpointsAllowed to be [true], got %v", stat.EndpointsAllowed)
+		}
+		if len(stat.UserAgentsAllowed) != 1 || stat.UserAgentsAllowed[0] != false {
+			t.Errorf("Expected UserAgentsAllowed to be [false], got %v", stat.UserAgentsAllowed)
+		}
+	})
+
+	t.Run("Insert same IP again, DeltaT is set", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		ti1 := TimedIp{
+			Ip:               ip1,
+			EndpointAllowed:  true,
+			UserAgentAllowed: false,
+			Time:             now,
+		}
+		ti2 := TimedIp{
+			Ip:               ip1,
+			EndpointAllowed:  false,
+			UserAgentAllowed: true,
+			Time:             now.Add(2 * time.Second),
+		}
+		insertIntoHaxmap(m, ip1, ti1)
+		insertIntoHaxmap(m, ip1, ti2)
+		ipUint32 := iputils.IPToUint32(ip1)
+		stat, exists := m.Get(ipUint32)
+		if !exists {
+			t.Fatalf("Expected IP stat to exist after insert")
+		}
+		if stat.Count != 2 {
+			t.Errorf("Expected count 2, got %d", stat.Count)
+		}
+		if len(stat.DeltaT) != 1 {
+			t.Errorf("Expected DeltaT length 1, got %d", len(stat.DeltaT))
+		} else if stat.DeltaT[0] != 2*time.Second {
+			t.Errorf("Expected DeltaT[0] to be 2s, got %v", stat.DeltaT[0])
+		}
+		if len(stat.EndpointsAllowed) != 2 || stat.EndpointsAllowed[1] != false {
+			t.Errorf("Expected EndpointsAllowed[1] to be false, got %v", stat.EndpointsAllowed)
+		}
+		if len(stat.UserAgentsAllowed) != 2 || stat.UserAgentsAllowed[1] != true {
+			t.Errorf("Expected UserAgentsAllowed[1] to be true, got %v", stat.UserAgentsAllowed)
+		}
+	})
+
+	t.Run("Insert multiple different IPs", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		ti1 := TimedIp{
+			Ip:               ip1,
+			EndpointAllowed:  true,
+			UserAgentAllowed: false,
+			Time:             now,
+		}
+		ti2 := TimedIp{
+			Ip:               ip2,
+			EndpointAllowed:  false,
+			UserAgentAllowed: true,
+			Time:             now.Add(1 * time.Second),
+		}
+		insertIntoHaxmap(m, ip1, ti1)
+		insertIntoHaxmap(m, ip2, ti2)
+		if _, exists := m.Get(iputils.IPToUint32(ip1)); !exists {
+			t.Errorf("Expected ip1 to exist in map")
+		}
+		if _, exists := m.Get(iputils.IPToUint32(ip2)); !exists {
+			t.Errorf("Expected ip2 to exist in map")
+		}
+	})
+
+	t.Run("DeltaT is not appended for first insert", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		ti := TimedIp{
+			Ip:               ip1,
+			EndpointAllowed:  true,
+			UserAgentAllowed: false,
+			Time:             now,
+		}
+		insertIntoHaxmap(m, ip1, ti)
+		stat, _ := m.Get(iputils.IPToUint32(ip1))
+		if len(stat.DeltaT) != 0 {
+			t.Errorf("Expected DeltaT to be empty for first insert, got %v", stat.DeltaT)
+		}
+	})
+}
+func TestDeleteFromHaxmap(t *testing.T) {
+	now := time.Now()
+	ip1 := net.ParseIP("192.168.1.1")
+	ip2 := net.ParseIP("192.168.1.2")
+
+	t.Run("Delete from empty map does nothing", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		deleteFromHaxmap(m, ip1)
+		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+			t.Errorf("Expected ip1 to not exist in map")
+		}
+	})
+
+	t.Run("Delete single entry removes from map", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		stat := IpStat{
+			Last:              now,
+			DeltaT:            []time.Duration{},
+			EndpointsAllowed:  []bool{true},
+			UserAgentsAllowed: []bool{false},
+			Count:             1,
+		}
+		m.Set(iputils.IPToUint32(ip1), stat)
+		deleteFromHaxmap(m, ip1)
+		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+			t.Errorf("Expected ip1 to be deleted from map")
+		}
+	})
+
+	t.Run("Delete decrements count and slices for multiple entries", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		stat := IpStat{
+			Last:              now,
+			DeltaT:            []time.Duration{1 * time.Second, 2 * time.Second},
+			EndpointsAllowed:  []bool{true, false, true},
+			UserAgentsAllowed: []bool{false, true, false},
+			Count:             3,
+		}
+		m.Set(iputils.IPToUint32(ip1), stat)
+		deleteFromHaxmap(m, ip1)
+		got, exists := m.Get(iputils.IPToUint32(ip1))
+		if !exists {
+			t.Fatalf("Expected ip1 to still exist in map")
+		}
+		if got.Count != 2 {
+			t.Errorf("Expected count 2, got %d", got.Count)
+		}
+		if len(got.DeltaT) != 1 || got.DeltaT[0] != 2*time.Second {
+			t.Errorf("Expected DeltaT to be [2s], got %v", got.DeltaT)
+		}
+		if len(got.EndpointsAllowed) != 2 || got.EndpointsAllowed[0] != false {
+			t.Errorf("Expected EndpointsAllowed[0] to be false, got %v", got.EndpointsAllowed)
+		}
+		if len(got.UserAgentsAllowed) != 2 || got.UserAgentsAllowed[0] != true {
+			t.Errorf("Expected UserAgentsAllowed[0] to be true, got %v", got.UserAgentsAllowed)
+		}
+	})
+
+	t.Run("Delete when count becomes zero resets DeltaT", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		stat := IpStat{
+			Last:              now,
+			DeltaT:            []time.Duration{1 * time.Second},
+			EndpointsAllowed:  []bool{true},
+			UserAgentsAllowed: []bool{false},
+			Count:             1,
+		}
+		m.Set(iputils.IPToUint32(ip1), stat)
+		deleteFromHaxmap(m, ip1)
+		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+			t.Errorf("Expected ip1 to be deleted from map")
+		}
+	})
+
+	t.Run("Delete handles multiple IPs independently", func(t *testing.T) {
+		m := haxmap.New[uint32, IpStat](8)
+		stat1 := IpStat{
+			Last:              now,
+			DeltaT:            []time.Duration{},
+			EndpointsAllowed:  []bool{true},
+			UserAgentsAllowed: []bool{false},
+			Count:             1,
+		}
+		stat2 := IpStat{
+			Last:              now,
+			DeltaT:            []time.Duration{},
+			EndpointsAllowed:  []bool{false},
+			UserAgentsAllowed: []bool{true},
+			Count:             1,
+		}
+		m.Set(iputils.IPToUint32(ip1), stat1)
+		m.Set(iputils.IPToUint32(ip2), stat2)
+		deleteFromHaxmap(m, ip1)
+		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+			t.Errorf("Expected ip1 to be deleted from map")
+		}
+		if _, exists := m.Get(iputils.IPToUint32(ip2)); !exists {
+			t.Errorf("Expected ip2 to still exist in map")
+		}
+	})
+}
+func TestSlidingWindow_Update(t *testing.T) {
+	now := time.Now()
+	ip1 := net.ParseIP("192.168.1.1")
+	ip2 := net.ParseIP("192.168.1.2")
+	ip3 := net.ParseIP("192.168.1.3")
+
+	t.Run("Update inserts new IPs and drops none if within window and maxEntries", func(t *testing.T) {
+		s := NewSlidingWindowTrie(10*time.Second, 10)
+		ti1 := TimedIp{Ip: ip1, Time: now}
+		ti2 := TimedIp{Ip: ip2, Time: now.Add(1 * time.Second)}
+		s.Update([]TimedIp{ti1, ti2})
+
+		if s.Trie.CountAll() != 2 {
+			t.Errorf("Expected 2 IPs in trie, got %d", s.Trie.CountAll())
+		}
+		if len(s.IpQueue) != 2 {
+			t.Errorf("Expected 2 IPs in queue, got %d", len(s.IpQueue))
+		}
+		if s.IpStats.Len() != 2 {
+			t.Errorf("Expected 2 IP stats, got %d", s.IpStats.Len())
+		}
+	})
+
+	t.Run("Update drops old IPs outside time window", func(t *testing.T) {
+		s := NewSlidingWindowTrie(2*time.Second, 10)
+		old := TimedIp{Ip: ip1, Time: now.Add(-5 * time.Second)}
+		newer := TimedIp{Ip: ip2, Time: now}
+		s.InsertNew([]TimedIp{old})
+		s.Update([]TimedIp{newer})
+
+		if s.Trie.CountAll() != 1 {
+			t.Errorf("Expected 1 IP in trie, got %d", s.Trie.CountAll())
+		}
+		if len(s.IpQueue) != 1 {
+			t.Errorf("Expected 1 IP in queue, got %d", len(s.IpQueue))
+		}
+		if !s.IpQueue[0].Ip.Equal(ip2) {
+			t.Errorf("Expected remaining IP to be ip2, got %v", s.IpQueue[0].Ip)
+		}
+		if s.IpStats.Len() != 1 {
+			t.Errorf("Expected 1 IP stat, got %d", s.IpStats.Len())
+		}
+		val, exists := s.IpStats.Get(iputils.IPToUint32(ip2))
+		if !exists {
+			t.Fatalf("Expected ip2 to exist in stats")
+		}
+		if val.Count != 1 {
+			t.Errorf("Expected ip2 count to be 1, got %d", val.Count)
+		}
+	})
+
+	t.Run("Update enforces maxEntries", func(t *testing.T) {
+		s := NewSlidingWindowTrie(10*time.Second, 2)
+		ti1 := TimedIp{Ip: ip1, Time: now}
+		ti2 := TimedIp{Ip: ip2, Time: now.Add(1 * time.Second)}
+		ti3 := TimedIp{Ip: ip3, Time: now.Add(2 * time.Second)}
+		s.Update([]TimedIp{ti1, ti2, ti3})
+
+		if s.Trie.CountAll() != 2 {
+			t.Errorf("Expected 2 IPs in trie, got %d", s.Trie.CountAll())
+		}
+		if len(s.IpQueue) != 2 {
+			t.Errorf("Expected 2 IPs in queue, got %d", len(s.IpQueue))
+		}
+		// Should keep the last two inserted
+		if !s.IpQueue[0].Ip.Equal(ip2) || !s.IpQueue[1].Ip.Equal(ip3) {
+			t.Errorf("Expected queue to have ip2 and ip3, got %v and %v", s.IpQueue[0].Ip, s.IpQueue[1].Ip)
+		}
+	})
+
+	t.Run("Update with empty input does not change state", func(t *testing.T) {
+		s := NewSlidingWindowTrie(10*time.Second, 5)
+		ti1 := TimedIp{Ip: ip1, Time: now}
+		s.InsertNew([]TimedIp{ti1})
+		s.Update([]TimedIp{})
+
+		if s.Trie.CountAll() != 1 {
+			t.Errorf("Expected 1 IP in trie, got %d", s.Trie.CountAll())
+		}
+		if len(s.IpQueue) != 1 {
+			t.Errorf("Expected 1 IP in queue, got %d", len(s.IpQueue))
+		}
+		val, exists := s.IpStats.Get(iputils.IPToUint32(ip1))
+		if !exists {
+			t.Fatalf("Expected ip1 to exist in stats")
+		}
+		if val.Count != 1 {
+			t.Errorf("Expected ip1 count to be 1, got %d", val.Count)
+		}
+	})
+
+	t.Run("Update with all expired IPs removes all", func(t *testing.T) {
+		s := NewSlidingWindowTrie(1*time.Second, 5)
+		old := TimedIp{Ip: ip1, Time: now.Add(-10 * time.Second)}
+		s.InsertNew([]TimedIp{old})
+		s.Update([]TimedIp{})
+
+		if s.Trie.CountAll() != 0 {
+			t.Errorf("Expected 0 IPs in trie, got %d", s.Trie.CountAll())
+		}
+		if len(s.IpQueue) != 0 {
+			t.Errorf("Expected 0 IPs in queue, got %d", len(s.IpQueue))
+		}
+		if s.IpStats.Len() != 0 {
+			t.Errorf("Expected 0 IP stats, got %d", s.IpStats.Len())
+		}
+		if _, exists := s.IpStats.Get(iputils.IPToUint32(ip1)); exists {
+			t.Errorf("Expected ip1 to be deleted from stats")
+		}
+	})
+}

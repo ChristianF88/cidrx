@@ -1,0 +1,85 @@
+package logparser
+
+import (
+	"fmt"
+	"os"
+	"testing"
+
+	"github.com/ChristianF88/cidrx/testutil"
+)
+
+// BenchmarkFileIO measures file I/O performance for chunk processing
+func BenchmarkFileIO(b *testing.B) {
+	// Create a temporary large file for testing
+	tempFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 1000000) // 1M lines
+	defer cleanup()
+
+	sizes := []int{1000, 5000, 10000, 50000}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("ParseConcurrent_%d_lines", size), func(b *testing.B) {
+			parser, err := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = parser.ParseFileParallelChunked(tempFile)
+			}
+		})
+	}
+}
+
+// BenchmarkFileOpenOperations measures the cost of file opening operations
+func BenchmarkFileOpenOperations(b *testing.B) {
+	tempFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 10000) // 10K lines
+	defer cleanup()
+
+	b.Run("SingleFileHandle", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			file, err := os.Open(tempFile)
+			if err != nil {
+				b.Fatal(err)
+			}
+			file.Close()
+		}
+	})
+
+	b.Run("MultipleFileHandles", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			// Simulate opening multiple handles like chunk processing does
+			handles := make([]*os.File, 8)
+			for j := 0; j < 8; j++ {
+				handle, err := os.Open(tempFile)
+				if err != nil {
+					b.Fatal(err)
+				}
+				handles[j] = handle
+			}
+			for _, handle := range handles {
+				handle.Close()
+			}
+		}
+	})
+}
+
+// BenchmarkChunkProcessing measures chunk processing performance
+func BenchmarkChunkProcessing(b *testing.B) {
+	tempFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 100000) // 100K lines
+	defer cleanup()
+
+	parser, err := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("ChunkProcessing", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = parser.ParseFileParallelChunked(tempFile)
+		}
+	})
+}

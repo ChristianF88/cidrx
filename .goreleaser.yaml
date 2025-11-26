@@ -1,0 +1,127 @@
+# GoReleaser configuration for cidrx
+# Documentation: https://goreleaser.com
+
+version: 2
+
+before:
+  hooks:
+    # Run tests before building
+    - sh -c "cd cidrx/src && go test ./..."
+    # Run static analysis
+    - sh -c "cd cidrx/src && go run honnef.co/go/tools/cmd/staticcheck@latest ./..."
+
+builds:
+  - id: cidrx
+    main: .
+    binary: cidrx
+    dir: cidrx/src
+
+    # Build for multiple platforms
+    goos:
+      - linux
+      - darwin    # macOS
+      - windows
+
+    goarch:
+      - amd64     # x86_64
+      - arm64     # ARM64 (M1/M2 Macs, ARM servers)
+      - arm       # 32-bit ARM
+
+    goarm:
+      - "7"       # ARMv7 (Raspberry Pi, etc.)
+
+    # Environment variables for build
+    env:
+      - CGO_ENABLED=0  # Static binaries
+
+    # Build flags
+    ldflags:
+      - -s -w  # Strip debug info
+      - -X github.com/ChristianF88/cidrx/version.Version={{.Version}}
+      - -X github.com/ChristianF88/cidrx/version.Commit={{.Commit}}
+      - -X github.com/ChristianF88/cidrx/version.Date={{.Date}}
+
+    # Ignore certain combinations
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: cidrx
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+    format_overrides:
+      - goos: windows
+        format: zip
+
+    files:
+      - README.md
+      - LICENSE
+      - cidrx.toml.example
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'typo'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
+  format: '{{.Message}}'
+
+release:
+  github:
+    owner: ChristianF88
+    name: cidrx
+
+  name_template: "cidrx {{.Version}}"
+
+  # Header and footer for release notes
+  header: |
+    ## cidrx {{.Version}}
+
+    High-performance botnet detection tool.
+
+    ### Installation
+
+    Download the appropriate binary for your platform below.
+
+  footer: |
+    **Full Changelog**: https://github.com/ChristianF88/cidrx/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ---
+
+    ### Verify Downloads
+
+    ```bash
+    sha256sum -c checksums.txt
+    ```

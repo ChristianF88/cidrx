@@ -1,0 +1,47 @@
+# Build artifacts
+bin/
+
+
+# Test/temporary files
+access.json
+access-test.log
+heatmap.html
+
+# Config files (local/personal)
+cidrx.toml
+cidrx-testing.toml
+CLAUDE.local.md
+
+# Python
+.venv
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hugo documentation site
+docs/public/
+docs/resources/_gen/
+docs/.hugo_build.lock
+docs/hugo_stats.json
+docs/node_modules/
+docs/.cache/
+.hugo_build.lock
+
+# Platform-specific configs (optional - uncomment if not needed)
+docs/.codesandbox/
+docs/.devcontainer/
+docs/.gitpod.yml
+docs/netlify.toml
+
+# AI
+.claude
+

@@ -90,6 +90,7 @@ type TrieParameters struct {
 type TrieStats struct {
 	TotalRequestsAfterFiltering int         `json:"total_requests_after_filtering"`
 	UniqueIPs                   int         `json:"unique_ips"`
+	SkippedInvalidIPs           int         `json:"skipped_invalid_ips,omitempty"`
 	InsertTimeMS                int64       `json:"insert_time_ms"`
 	CIDRAnalysis                []CIDRRange `json:"cidr_analysis,omitempty"`
 }

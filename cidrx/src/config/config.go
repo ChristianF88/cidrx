@@ -47,6 +47,10 @@ type TrieConfig struct {
 	ClusterArgSets []ClusterArgSet
 	UseForJail     []bool `toml:"useForJail"`
 
+	// Raw values for validation reporting when parsing fails
+	StartTimeRaw string `toml:"-"`
+	EndTimeRaw   string `toml:"-"`
+
 	// Compiled regex patterns for fast filtering
 	userAgentRegexCompiled *regexp.Regexp
 	endpointRegexCompiled  *regexp.Regexp
@@ -227,13 +231,21 @@ func parseTrieConfig(m map[string]any) *TrieConfig {
 		}
 	}
 	if v, ok := m["startTime"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			config.StartTime = &t
+		if v != "" {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				config.StartTime = &t
+			} else {
+				config.StartTimeRaw = v // Store for warning
+			}
 		}
 	}
 	if v, ok := m["endTime"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			config.EndTime = &t
+		if v != "" {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				config.EndTime = &t
+			} else {
+				config.EndTimeRaw = v // Store for warning
+			}
 		}
 	}
 	if v, ok := m["cidrRanges"].([]any); ok {

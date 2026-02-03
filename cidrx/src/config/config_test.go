@@ -860,6 +860,96 @@ endpointRegex = "*invalid regex"
 	}
 }
 
+func TestInvalidTimeFormatStoresRawValue(t *testing.T) {
+	testConfigContent := `
+[static.trie_1]
+startTime = "2025-01-01T00:00:00"
+endTime = "2025-12-31"
+cidrRanges = ["192.168.1.0/24"]
+clusterArgSets = [[100, 24, 32, 0.1]]
+useForJail = [true]
+`
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid_time_config.toml")
+
+	err := os.WriteFile(configPath, []byte(testConfigContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	config, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	trie1, exists := config.StaticTries["trie_1"]
+	if !exists {
+		t.Fatal("Expected trie_1 to exist")
+	}
+
+	// StartTime should be nil (parse failed) but StartTimeRaw should be set
+	if trie1.StartTime != nil {
+		t.Errorf("Expected StartTime to be nil for invalid format, got %v", trie1.StartTime)
+	}
+	if trie1.StartTimeRaw != "2025-01-01T00:00:00" {
+		t.Errorf("Expected StartTimeRaw to be '2025-01-01T00:00:00', got '%s'", trie1.StartTimeRaw)
+	}
+
+	// EndTime should be nil (parse failed) but EndTimeRaw should be set
+	if trie1.EndTime != nil {
+		t.Errorf("Expected EndTime to be nil for invalid format, got %v", trie1.EndTime)
+	}
+	if trie1.EndTimeRaw != "2025-12-31" {
+		t.Errorf("Expected EndTimeRaw to be '2025-12-31', got '%s'", trie1.EndTimeRaw)
+	}
+}
+
+func TestValidTimeFormatDoesNotStoreRawValue(t *testing.T) {
+	testConfigContent := `
+[static.trie_1]
+startTime = "2025-01-01T00:00:00Z"
+endTime = "2025-12-31T23:59:59Z"
+cidrRanges = ["192.168.1.0/24"]
+clusterArgSets = [[100, 24, 32, 0.1]]
+useForJail = [true]
+`
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "valid_time_config.toml")
+
+	err := os.WriteFile(configPath, []byte(testConfigContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	config, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	trie1, exists := config.StaticTries["trie_1"]
+	if !exists {
+		t.Fatal("Expected trie_1 to exist")
+	}
+
+	// StartTime should be set (parse succeeded) and StartTimeRaw should be empty
+	if trie1.StartTime == nil {
+		t.Error("Expected StartTime to be set for valid format, got nil")
+	}
+	if trie1.StartTimeRaw != "" {
+		t.Errorf("Expected StartTimeRaw to be empty for valid format, got '%s'", trie1.StartTimeRaw)
+	}
+
+	// EndTime should be set (parse succeeded) and EndTimeRaw should be empty
+	if trie1.EndTime == nil {
+		t.Error("Expected EndTime to be set for valid format, got nil")
+	}
+	if trie1.EndTimeRaw != "" {
+		t.Errorf("Expected EndTimeRaw to be empty for valid format, got '%s'", trie1.EndTimeRaw)
+	}
+}
+
 func TestEmptyRegexHandling(t *testing.T) {
 	testConfigContent := `
 [static.trie_1]

@@ -861,28 +861,11 @@ func (a *App) buildSummaryText() string {
 		parsingTime))
 
 	// Trie-specific stats (show below the fixed stats)
-	// Check if we're in caching mode (jsonResult temporarily set for a specific trie)
-	// or normal multi-trie mode (using currentTrie index)
+	// Always use multiTrieResult directly for accurate Parameters and Stats
 	if a.cfg != nil && a.multiTrieResult != nil && a.currentTrie < len(a.multiTrieResult.Tries) {
-		// Check if we should use jsonResult data (when called from preRenderTrieTexts)
-		// or multiTrieResult data (normal operation)
-		var trieData output.TrieResult
-
-		if a.jsonResult != nil && len(a.jsonResult.Tries) == 0 && len(a.jsonResult.Clustering.Data) > 0 {
-			// We have legacy format jsonResult - this means we're in caching mode or after trie switch
-			// The legacy format stores trie data in root fields, we need to reconstruct the TrieResult
-			trieData = output.TrieResult{
-				Name: extractTrieNameFromLogFile(a.jsonResult.General.LogFile),
-				Stats: output.TrieStats{
-					UniqueIPs: a.jsonResult.General.UniqueIPs,
-					// We can't get all stats from legacy format, but name and UniqueIPs are enough for summary
-				},
-				Data: a.jsonResult.Clustering.Data,
-			}
-		} else {
-			// Normal mode - use currentTrie index from multiTrieResult
-			trieData = a.multiTrieResult.Tries[a.currentTrie]
-		}
+		// Always use multiTrieResult directly - it has the accurate Parameters and Stats
+		// The legacy format conversion loses this information, so we bypass it here
+		trieData := a.multiTrieResult.Tries[a.currentTrie]
 
 		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", trieData.Name))
 
@@ -931,17 +914,6 @@ func (a *App) buildSummaryText() string {
 	}
 
 	return summaryText.String()
-}
-
-// extractTrieNameFromLogFile extracts the trie name from a log file name like "file.log [Trie: trie_name]"
-func extractTrieNameFromLogFile(logFile string) string {
-	if idx := strings.Index(logFile, "[Trie: "); idx != -1 {
-		start := idx + len("[Trie: ")
-		if end := strings.Index(logFile[start:], "]"); end != -1 {
-			return logFile[start : start+end]
-		}
-	}
-	return "unknown"
 }
 
 // getActiveFilters returns a list of active filter descriptions

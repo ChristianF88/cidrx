@@ -110,9 +110,11 @@ func (ftc *FastTrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResul
 
 // preRenderTrieTexts pre-renders all text components for a trie
 func (ftc *FastTrieCache) preRenderTrieTexts(trieIndex int, legacyData *output.JSONOutput, app *App) {
-	// Temporarily set the app's jsonResult to render texts
+	// Temporarily set the app's state to render texts for this specific trie
 	originalResult := app.jsonResult
+	originalTrieIndex := app.currentTrie
 	app.jsonResult = legacyData
+	app.currentTrie = trieIndex
 
 	// Pre-render summary text
 	ftc.summaryTexts[trieIndex] = app.buildSummaryText()
@@ -126,8 +128,9 @@ func (ftc *FastTrieCache) preRenderTrieTexts(trieIndex int, legacyData *output.J
 	// Pre-render diagnostics text
 	ftc.diagnosticTexts[trieIndex] = app.buildDiagnosticsText()
 
-	// Restore original result
+	// Restore original state
 	app.jsonResult = originalResult
+	app.currentTrie = originalTrieIndex
 }
 
 // preProcessTrafficData pre-processes traffic data for visualization

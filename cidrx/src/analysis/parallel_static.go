@@ -164,6 +164,25 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		return trieResult
 	}
 
+	// Warn if time parsing failed
+	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
+		jsonOutput.AddWarning("invalid_time_format",
+			fmt.Sprintf("Trie '%s': Failed to parse startTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+				trieName, trieConfig.StartTimeRaw), 1)
+	}
+	if trieConfig.EndTimeRaw != "" && trieConfig.EndTime == nil {
+		jsonOutput.AddWarning("invalid_time_format",
+			fmt.Sprintf("Trie '%s': Failed to parse endTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+				trieName, trieConfig.EndTimeRaw), 1)
+	}
+
+	// Warn if endTime is before startTime (invalid time range)
+	if trieConfig.StartTime != nil && trieConfig.EndTime != nil && trieConfig.EndTime.Before(*trieConfig.StartTime) {
+		jsonOutput.AddWarning("invalid_time_range",
+			fmt.Sprintf("Trie '%s': endTime (%s) is before startTime (%s) - no requests can match this range",
+				trieName, trieConfig.EndTime.Format(time.RFC3339), trieConfig.StartTime.Format(time.RFC3339)), 1)
+	}
+
 	// Set CidrRanges after null check
 	trieResult.Parameters.CidrRanges = trieConfig.CidrRanges
 
@@ -302,6 +321,21 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		UniqueIPs:                   int(trieInstance.ParallelCountAll()),
 		SkippedInvalidIPs:           invalidIPCount,
 		InsertTimeMS:                insertDuration.Milliseconds(),
+	}
+
+	// Warn if time filter resulted in zero requests (non-overlapping time range)
+	if len(filteredRequests) == 0 && (!startTime.IsZero() || !endTime.IsZero()) {
+		var timeRangeStr string
+		if !startTime.IsZero() && !endTime.IsZero() {
+			timeRangeStr = fmt.Sprintf("%s to %s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+		} else if !startTime.IsZero() {
+			timeRangeStr = fmt.Sprintf("after %s", startTime.Format(time.RFC3339))
+		} else {
+			timeRangeStr = fmt.Sprintf("before %s", endTime.Format(time.RFC3339))
+		}
+		jsonOutput.AddWarning("time_filter_no_results",
+			fmt.Sprintf("Trie '%s': Time filter (%s) resulted in 0 requests - the time range may not overlap with log data",
+				trieName, timeRangeStr), 1)
 	}
 
 	// CIDR range analysis (same as original but with parallel trie)

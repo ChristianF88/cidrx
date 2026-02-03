@@ -2,6 +2,7 @@ package output
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,9 @@ type JSONOutput struct {
 	Errors                []Error      `json:"errors"`
 	UserAgentWhitelistIPs []string     `json:"useragent_whitelist_ips,omitempty"`
 	UserAgentBlacklistIPs []string     `json:"useragent_blacklist_ips,omitempty"`
+
+	// Mutex for thread-safe warning/error appending
+	mu sync.Mutex `json:"-"`
 }
 
 // Metadata contains information about the analysis run
@@ -171,8 +175,10 @@ func (j *JSONOutput) ToCompactJSON() ([]byte, error) {
 	return json.Marshal(j)
 }
 
-// AddWarning adds a warning to the output
+// AddWarning adds a warning to the output (thread-safe)
 func (j *JSONOutput) AddWarning(warningType, message string, count int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	j.Warnings = append(j.Warnings, Warning{
 		Type:    warningType,
 		Message: message,
@@ -180,8 +186,10 @@ func (j *JSONOutput) AddWarning(warningType, message string, count int) {
 	})
 }
 
-// AddError adds an error to the output
+// AddError adds an error to the output (thread-safe)
 func (j *JSONOutput) AddError(errorType, message string, count int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	j.Errors = append(j.Errors, Error{
 		Type:    errorType,
 		Message: message,

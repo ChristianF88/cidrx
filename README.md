@@ -16,7 +16,7 @@ cidrx helps you identify and block botnets attacking your web services by:
 - **Static**: Analyze historical logs (post-incident, audits)
 - **Live**: Real-time monitoring with automatic banning
 
-**Performance:** 2.4M+ requests/sec on commodity hardware
+**Performance:** 1M+ requests/sec on notebook hardware
 
 ## Quick Start
 

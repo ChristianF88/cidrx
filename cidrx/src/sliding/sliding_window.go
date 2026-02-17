@@ -71,25 +71,27 @@ func insertIntoHaxmap(m *haxmap.Map[uint32, IpStat], ip net.IP, timedIp TimedIp)
 
 func deleteFromHaxmap(m *haxmap.Map[uint32, IpStat], ip net.IP) {
 	ipUint32 := iputils.IPToUint32(ip)
-	if stat, exists := m.Get(ipUint32); exists {
-		stat.Count--
-		if stat.Count <= 0 {
-			m.Del(ipUint32)
-		} else {
-			if stat.Count == 0 {
-				// If only one entry left, we can keep the last time and reset the slices
-				stat.DeltaT = []time.Duration{}
-			} else {
-				// Remove the first element from DeltaT, EndpointsAllowed, UserAgentsAllowed
-				if len(stat.DeltaT) > 0 {
-					stat.DeltaT = stat.DeltaT[1:] // remove the first element
-				}
-			}
-			stat.EndpointsAllowed = stat.EndpointsAllowed[1:]   // remove the first element
-			stat.UserAgentsAllowed = stat.UserAgentsAllowed[1:] // remove the first element
-			m.Set(ipUint32, stat)                               // update the map with the modified stat
-		}
+	stat, exists := m.Get(ipUint32)
+	if !exists {
+		return
 	}
+	stat.Count--
+	if stat.Count <= 0 {
+		m.Del(ipUint32)
+		return
+	}
+	// Remove the first element from DeltaT
+	if len(stat.DeltaT) > 0 {
+		stat.DeltaT = stat.DeltaT[1:]
+	}
+	// Remove the first element from EndpointsAllowed/UserAgentsAllowed
+	if len(stat.EndpointsAllowed) > 0 {
+		stat.EndpointsAllowed = stat.EndpointsAllowed[1:]
+	}
+	if len(stat.UserAgentsAllowed) > 0 {
+		stat.UserAgentsAllowed = stat.UserAgentsAllowed[1:]
+	}
+	m.Set(ipUint32, stat)
 }
 
 func (s *SlidingWindow) InsertNew(timedIPs []TimedIp) {

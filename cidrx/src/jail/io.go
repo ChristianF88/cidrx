@@ -44,12 +44,6 @@ func WriteToFile(filename string, content string) error {
 	return nil
 }
 func ReadFromFile(filename string) (string, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		return "", err
@@ -72,7 +66,7 @@ func JailToFile(jail Jail, filename string) error {
 
 func fileExists(filename string) bool {
 	_, err := os.Stat(filename)
-	return err == nil || !os.IsNotExist(err)
+	return err == nil
 }
 
 func FileToJail(filename string) (Jail, error) {

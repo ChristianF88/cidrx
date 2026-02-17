@@ -696,6 +696,35 @@ func TestDeleteFromHaxmap(t *testing.T) {
 		}
 	})
 }
+func TestDeleteFromHaxmap_EmptySlicesNoPanic(t *testing.T) {
+	// Verify that deleteFromHaxmap doesn't panic when slices are empty
+	// (previously it would index empty slices without bounds checking)
+	m := haxmap.New[uint32, IpStat](8)
+	ip := net.ParseIP("10.0.0.1")
+	ipUint32 := iputils.IPToUint32(ip)
+
+	// Create a stat with count > 1 but empty slices (edge case)
+	stat := IpStat{
+		Last:              time.Now(),
+		DeltaT:            []time.Duration{},
+		EndpointsAllowed:  []bool{},
+		UserAgentsAllowed: []bool{},
+		Count:             2,
+	}
+	m.Set(ipUint32, stat)
+
+	// This should not panic
+	deleteFromHaxmap(m, ip)
+
+	got, exists := m.Get(ipUint32)
+	if !exists {
+		t.Fatalf("Expected IP stat to still exist after decrement")
+	}
+	if got.Count != 1 {
+		t.Errorf("Expected count 1, got %d", got.Count)
+	}
+}
+
 func TestSlidingWindow_Update(t *testing.T) {
 	now := time.Now()
 	ip1 := net.ParseIP("192.168.1.1")

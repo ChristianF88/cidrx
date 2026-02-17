@@ -153,37 +153,23 @@ func (pt *ParallelTrie) BatchParallelInsertUint32(ips []uint32, numWorkers int) 
 	wg.Wait()
 }
 
-// BatchParallelInsertSorted efficiently inserts a batch of IPs with sorting and deduplication optimization
+// BatchParallelInsertSorted efficiently inserts a batch of IPs with sorting optimization
 func (pt *ParallelTrie) BatchParallelInsertSorted(ips []net.IP) {
 	if len(ips) == 0 {
 		return
 	}
 
-	// Convert to uint32 for faster sorting and deduplication
+	// Convert to uint32 for faster sorting
 	ipUints := make([]uint32, len(ips))
 	for i, ip := range ips {
 		ipUints[i] = iputils.IPToUint32(ip)
 	}
 
-	// Sort for better cache locality and deduplication
+	// Sort for better cache locality (BatchInsertSortedUint32 handles duplicate counting)
 	sort.Slice(ipUints, func(i, j int) bool {
 		return ipUints[i] < ipUints[j]
 	})
 
-	// Deduplicate sorted IPs in-place
-	if len(ipUints) > 0 {
-		uniqueCount := 1
-		for i := 1; i < len(ipUints); i++ {
-			if ipUints[i] != ipUints[uniqueCount-1] {
-				ipUints[uniqueCount] = ipUints[i]
-				uniqueCount++
-			}
-		}
-		ipUints = ipUints[:uniqueCount]
-	}
-
-	// For sorted insertion, use the optimized batch insertion method
-	// The parallelization benefit comes from the sorting/deduplication phase above
 	pt.mutex.Lock()
 	pt.BatchInsertSortedUint32(ipUints)
 	pt.mutex.Unlock()

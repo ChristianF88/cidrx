@@ -462,12 +462,7 @@ func (pp *ParallelParser) readChunk(file *os.File, job chunkJob, linesChan chan<
 			lineBuffer = lineBuffer[:len(lineData)]
 			copy(lineBuffer, lineData)
 
-			select {
-			case linesChan <- lineBuffer:
-			default:
-				// Channel full, block until space available
-				linesChan <- lineBuffer
-			}
+			linesChan <- lineBuffer
 
 			start = i + 1
 			bytesProcessed = i + 1
@@ -961,27 +956,12 @@ func parseBytesUltraFast(line []byte, start, end int) uint32 {
 	}
 
 	result := uint32(0)
-	// Unroll loop for common case of small numbers
-	length := end - start
-	if length <= 8 {
-		// Handle up to 8 digits with unrolled loop
-		for i := start; i < end; i++ {
-			digit := line[i]
-			if digit >= '0' && digit <= '9' {
-				result = result*10 + uint32(digit&0x0F) // Use bit masking
-			} else {
-				break
-			}
-		}
-	} else {
-		// Fallback for very large numbers
-		for i := start; i < end; i++ {
-			digit := line[i]
-			if digit >= '0' && digit <= '9' {
-				result = result*10 + uint32(digit&0x0F)
-			} else {
-				break
-			}
+	for i := start; i < end; i++ {
+		digit := line[i]
+		if digit >= '0' && digit <= '9' {
+			result = result*10 + uint32(digit&0x0F)
+		} else {
+			break
 		}
 	}
 	return result

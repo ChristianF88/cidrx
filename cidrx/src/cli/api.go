@@ -477,8 +477,12 @@ func executeLiveAnalysis(cfg *config.Config) {
 		if err := jailInstance.Update(mergedCIDRs); err != nil {
 			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
 		}
-		jail.JailToFile(jailInstance, cfg.GetJailFile())
-		jail.WriteBanFile(cfg.GetBanFile(), jailInstance.ListActiveBans())
+		if err := jail.JailToFile(jailInstance, cfg.GetJailFile()); err != nil {
+			jsonOutput.AddError("jail_save", fmt.Sprintf("failed to save jail: %v", err), 1)
+		}
+		if err := jail.WriteBanFile(cfg.GetBanFile(), jailInstance.ListActiveBans()); err != nil {
+			jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
+		}
 
 		loopEnd := time.Since(loopStart)
 

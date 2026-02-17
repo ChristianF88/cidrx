@@ -1,7 +1,6 @@
 package trie
 
 import (
-	"fmt"
 	"net"
 	"runtime"
 	"sync"
@@ -125,8 +124,6 @@ func (t *Trie) Delete(ip net.IP) {
 	// The IP was found, then the counts need to be modified at each node
 	for i := len(stack) - 1; i >= 0; i-- {
 		if stack[i].Count == 0 {
-			// If the count is already zero, we can stop
-			fmt.Println("To delete IP '", ip, "' not found in Trie. This should not happen.")
 			return
 		}
 		stack[i].Count--

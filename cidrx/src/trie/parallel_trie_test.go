@@ -162,6 +162,39 @@ func TestParallelTrieThreadSafety(t *testing.T) {
 	}
 }
 
+func TestBatchParallelInsertSorted_PreservesDuplicateCounts(t *testing.T) {
+	// Verify that BatchParallelInsertSorted correctly counts duplicate IPs
+	// (previously the deduplication step would discard duplicates, losing counts)
+	ip := net.ParseIP("192.168.1.1")
+	duplicates := []net.IP{ip, ip, ip, ip, ip}
+
+	// Sequential reference
+	seqTrie := NewTrie()
+	for _, ip := range duplicates {
+		seqTrie.Insert(ip)
+	}
+
+	// Sorted parallel insertion
+	parTrie := NewParallelTrie()
+	parTrie.BatchParallelInsertSorted(duplicates)
+
+	seqCount := seqTrie.CountAll()
+	parCount := parTrie.ParallelCountAll()
+
+	if seqCount != parCount {
+		t.Errorf("Duplicate count mismatch: sequential=%d, sorted_parallel=%d (expected both to be %d)",
+			seqCount, parCount, len(duplicates))
+	}
+
+	// Also verify the individual IP count
+	seqIPCount := seqTrie.Count(ip)
+	parIPCount := parTrie.ParallelCount(ip)
+	if seqIPCount != parIPCount {
+		t.Errorf("Individual IP count mismatch: sequential=%d, sorted_parallel=%d",
+			seqIPCount, parIPCount)
+	}
+}
+
 func TestParallelTrieEdgeCases(t *testing.T) {
 	// Test edge cases
 	parTrie := NewParallelTrie()

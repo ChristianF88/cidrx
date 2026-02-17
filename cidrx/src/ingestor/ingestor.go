@@ -201,9 +201,19 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 }
 
 func (ing *TCPIngestor) IsClosed() bool {
+	if ing.server == nil {
+		return true
+	}
+	// Check if the server's receive channel is closed by checking events length
+	// A zero-length events channel after server init means the goroutine closed it
 	select {
-	case _, ok := <-ing.events:
-		return !ok
+	case batch, ok := <-ing.events:
+		if !ok {
+			return true
+		}
+		// Put the batch back — avoid losing data
+		ing.events <- batch
+		return false
 	default:
 		return false
 	}

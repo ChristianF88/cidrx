@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -193,13 +192,12 @@ func BenchmarkCollectCIDRs(b *testing.B) {
 	}
 }
 
-// BenchmarkCollectCIDRsSequential benchmarks the sequential implementation
+// BenchmarkCollectCIDRsSequential benchmarks the sequential numeric implementation
 func BenchmarkCollectCIDRsSequential(b *testing.B) {
 	sizes := []int{1000, 10000, 100000, 1000000}
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
-			// Create a trie with random IPs
 			trie := NewTrie()
 			ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
 			if err != nil {
@@ -210,26 +208,11 @@ func BenchmarkCollectCIDRsSequential(b *testing.B) {
 				trie.Insert(ip)
 			}
 
-			// Use sequential implementation
-			minClusterSize := uint32(10)
-			minDepth := uint32(8)
-			maxDepth := uint32(24)
-			threshold := uint32(0.5 * 1000)
-
-			builderPool := &sync.Pool{
-				New: func() interface{} {
-					builder := &strings.Builder{}
-					builder.Grow(18) // Pre-allocate for typical CIDR string
-					return builder
-				},
-			}
-
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				results := make([]string, 0, 256)
-				trie.CollectCIDRsCoreSequential(trie.Root, 0, 0, &results, minClusterSize, minDepth, maxDepth, threshold, builderPool)
+				_ = trie.collectCIDRsSequentialNumeric(10, 8, 24, 500)
 			}
 		})
 	}
@@ -284,16 +267,8 @@ func BenchmarkParallelizationOverhead(b *testing.B) {
 
 	b.Run("sequential", func(b *testing.B) {
 		b.ReportAllocs()
-		builderPool := &sync.Pool{
-			New: func() interface{} {
-				builder := &strings.Builder{}
-				builder.Grow(18) // Pre-allocate for typical CIDR string
-				return builder
-			},
-		}
 		for i := 0; i < b.N; i++ {
-			results := make([]string, 0, 32)
-			trie.CollectCIDRsCoreSequential(trie.Root, 0, 0, &results, 5, 16, 30, 500, builderPool)
+			_ = trie.collectCIDRsSequentialNumeric(5, 16, 30, 500)
 		}
 	})
 }

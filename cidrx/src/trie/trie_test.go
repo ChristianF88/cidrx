@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/ChristianF88/cidrx/iputils"
@@ -524,14 +523,14 @@ func TestTrieCollectCIDRsLargeScale(t *testing.T) {
 	fmt.Printf("Expected CIDRs: %v\n", expectedCIDRs)
 }
 
-func TestCollectCIDRsCoreSequential(t *testing.T) {
+func TestCollectCIDRs(t *testing.T) {
 	tests := []struct {
 		name           string
 		insertIPs      []string
 		minClusterSize uint32
 		minDepth       uint32
 		maxDepth       uint32
-		threshold      uint32
+		threshold      float64
 		expectedCIDRs  []string
 	}{
 		{
@@ -540,7 +539,7 @@ func TestCollectCIDRsCoreSequential(t *testing.T) {
 			minClusterSize: 1,
 			minDepth:       16,
 			maxDepth:       31,
-			threshold:      1000,
+			threshold:      1.0,
 			expectedCIDRs:  []string{"192.168.1.0/31"},
 		},
 		{
@@ -549,7 +548,7 @@ func TestCollectCIDRsCoreSequential(t *testing.T) {
 			minClusterSize: 4,
 			minDepth:       24,
 			maxDepth:       30,
-			threshold:      1000,
+			threshold:      1.0,
 			expectedCIDRs:  []string{"192.168.1.0/30"},
 		},
 		{
@@ -558,7 +557,7 @@ func TestCollectCIDRsCoreSequential(t *testing.T) {
 			minClusterSize: 3,
 			minDepth:       16,
 			maxDepth:       32,
-			threshold:      1000,
+			threshold:      1.0,
 			expectedCIDRs:  []string{},
 		},
 		{
@@ -567,17 +566,15 @@ func TestCollectCIDRsCoreSequential(t *testing.T) {
 			minClusterSize: 5,
 			minDepth:       24,
 			maxDepth:       30,
-			threshold:      2000,
+			threshold:      2.0,
 			expectedCIDRs:  []string{"192.168.1.0/29"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Initialize a new Trie
 			trie := NewTrie()
 
-			// Insert IPs into the Trie
 			for _, ipStr := range tt.insertIPs {
 				ip := net.ParseIP(ipStr)
 				if ip == nil {
@@ -586,18 +583,8 @@ func TestCollectCIDRsCoreSequential(t *testing.T) {
 				trie.Insert(ip)
 			}
 
-			// Prepare results slice and builder pool
-			results := []string{}
-			builderPool := &sync.Pool{
-				New: func() interface{} {
-					return &strings.Builder{}
-				},
-			}
+			results := trie.CollectCIDRs(tt.minClusterSize, tt.minDepth, tt.maxDepth, tt.threshold)
 
-			// Call collectCIDRsCoreSequential
-			trie.CollectCIDRsCoreSequential(trie.Root, 0, 0, &results, tt.minClusterSize, tt.minDepth, tt.maxDepth, tt.threshold, builderPool)
-
-			// Verify the collected CIDRs
 			if len(results) != len(tt.expectedCIDRs) {
 				t.Errorf("Expected CIDRs %v, got %v", tt.expectedCIDRs, results)
 			}

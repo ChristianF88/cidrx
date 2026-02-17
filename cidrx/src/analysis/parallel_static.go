@@ -87,6 +87,10 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 		config *config.TrieConfig
 	}
 
+	// Accumulate User-Agent derived IPs across all tries (thread-safe via triesMutex)
+	globalUserAgentWhitelistIPSet := make(map[string]bool)
+	globalUserAgentBlacklistIPSet := make(map[string]bool)
+
 	trieWorkChan := make(chan trieWork, len(cfg.StaticTries))
 
 	// Start trie workers (parallel trie building)
@@ -101,11 +105,17 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 			defer trieWG.Done()
 
 			for work := range trieWorkChan {
-				result := processTrieParallel(work.name, work.config, requests, cfg, jsonOutput)
+				result, whitelistIPs, blacklistIPs := processTrieParallel(work.name, work.config, requests, cfg, jsonOutput)
 
-				// Thread-safe append to results
+				// Thread-safe append to results and merge UA IPs
 				triesMutex.Lock()
 				trieResults = append(trieResults, result)
+				for _, ip := range whitelistIPs {
+					globalUserAgentWhitelistIPSet[ip] = true
+				}
+				for _, ip := range blacklistIPs {
+					globalUserAgentBlacklistIPSet[ip] = true
+				}
 				triesMutex.Unlock()
 			}
 		}()
@@ -128,6 +138,14 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	// Add results to output
 	jsonOutput.Tries = trieResults
 
+	// Convert global User-Agent IP sets to slices for jail processing
+	for ip := range globalUserAgentWhitelistIPSet {
+		jsonOutput.UserAgentWhitelistIPs = append(jsonOutput.UserAgentWhitelistIPs, ip)
+	}
+	for ip := range globalUserAgentBlacklistIPSet {
+		jsonOutput.UserAgentBlacklistIPs = append(jsonOutput.UserAgentBlacklistIPs, ip)
+	}
+
 	// Process jail with whitelist/blacklist if configured
 	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
 		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
@@ -139,9 +157,10 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	return jsonOutput, requests, nil
 }
 
-// processTrieParallel processes a single trie with parallel insertion
+// processTrieParallel processes a single trie with parallel insertion.
+// Returns the trie result along with collected User-Agent whitelist/blacklist IPs.
 func processTrieParallel(trieName string, trieConfig *config.TrieConfig, requests []ingestor.Request,
-	cfg *config.Config, jsonOutput *output.JSONOutput) output.TrieResult {
+	cfg *config.Config, jsonOutput *output.JSONOutput) (output.TrieResult, []string, []string) {
 
 	insertStart := time.Now()
 
@@ -154,7 +173,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 
 	if trieConfig == nil {
 		jsonOutput.AddWarning("config_warning", fmt.Sprintf("trie configuration '%s' is nil, skipping", trieName), 1)
-		return trieResult
+		return trieResult, nil, nil
 	}
 
 	// Warn if time parsing failed
@@ -355,10 +374,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	// Clustering (same as original but with parallel trie)
 	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
 
-	// Store User-Agent results in additional info if needed
-	// Note: These would be stored elsewhere in the JSON output structure
-
-	return trieResult
+	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
 }
 
 // processRequestsConcurrentlyParallel implements high-performance concurrent filtering

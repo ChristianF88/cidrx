@@ -56,26 +56,35 @@ func NewNodeAllocator() *NodeAllocator {
 	}
 }
 
-// GetNode returns a pointer to a new zeroed TrieNode
-// Thread-safe implementation with mutex protection
+// GetNode returns a pointer to a new zeroed TrieNode.
+// Thread-safe. Chunk allocation happens outside the lock to avoid
+// holding the mutex during a ~49KB heap allocation.
 func (na *NodeAllocator) GetNode() *TrieNode {
 	na.mu.Lock()
-	defer na.mu.Unlock()
 
-	// Check if we need a new chunk
+	// Fast path: space available in current chunk
+	if len(na.chunks) > 0 && na.currentIndex < na.chunkSize {
+		node := &na.chunks[na.currentChunk][na.currentIndex]
+		na.currentIndex++
+		na.mu.Unlock()
+		return node
+	}
+	na.mu.Unlock()
+
+	// Slow path: allocate new chunk outside the lock
+	newChunk := make([]TrieNode, na.chunkSize)
+
+	na.mu.Lock()
+	// Double-check: another goroutine may have already allocated a chunk
 	if len(na.chunks) == 0 || na.currentIndex >= na.chunkSize {
-		// Allocate a new chunk
-		newChunk := make([]TrieNode, na.chunkSize)
 		na.chunks = append(na.chunks, newChunk)
 		na.currentChunk = len(na.chunks) - 1
 		na.currentIndex = 0
 	}
 
-	// Get node from current chunk
 	node := &na.chunks[na.currentChunk][na.currentIndex]
 	na.currentIndex++
-
-	// Node is already zeroed when allocated
+	na.mu.Unlock()
 	return node
 }
 

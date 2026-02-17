@@ -25,29 +25,29 @@ type Jail struct {
 	AllCidrs []string // this is used to store all ranges that are in jail
 }
 
-func (jail *Jail) RemovePrisoner(cellIdx, prisonerIdx int) {
-	if cellIdx < 0 || cellIdx >= len(jail.Cells) {
+func (j *Jail) RemovePrisoner(cellIdx, prisonerIdx int) {
+	if cellIdx < 0 || cellIdx >= len(j.Cells) {
 		return
 	}
-	if prisonerIdx < 0 || prisonerIdx >= len(jail.Cells[cellIdx].Prisoners) {
+	if prisonerIdx < 0 || prisonerIdx >= len(j.Cells[cellIdx].Prisoners) {
 		return
 	}
 
 	// Get CIDR before removal
-	cidr := jail.Cells[cellIdx].Prisoners[prisonerIdx].Cidr
+	cidr := j.Cells[cellIdx].Prisoners[prisonerIdx].Cidr
 
 	// Remove the prisoner from the cell
-	jail.Cells[cellIdx].Prisoners = append(
-		jail.Cells[cellIdx].Prisoners[:prisonerIdx],
-		jail.Cells[cellIdx].Prisoners[prisonerIdx+1:]...,
+	j.Cells[cellIdx].Prisoners = append(
+		j.Cells[cellIdx].Prisoners[:prisonerIdx],
+		j.Cells[cellIdx].Prisoners[prisonerIdx+1:]...,
 	)
 
 	// Remove the CIDR from the AllCidrs slice
-	for i, cidrInJail := range jail.AllCidrs {
+	for i, cidrInJail := range j.AllCidrs {
 		if cidrInJail == cidr {
-			jail.AllCidrs = append(
-				jail.AllCidrs[:i],
-				jail.AllCidrs[i+1:]...,
+			j.AllCidrs = append(
+				j.AllCidrs[:i],
+				j.AllCidrs[i+1:]...,
 			)
 			break
 		}
@@ -76,8 +76,8 @@ func NewJail() Jail {
 	}
 }
 
-func (jail *Jail) rangeInJail(cidr string) (bool, int, int) {
-	for cId, cell := range jail.Cells {
+func (j *Jail) rangeInJail(cidr string) (bool, int, int) {
+	for cId, cell := range j.Cells {
 		for pId, prisoner := range cell.Prisoners {
 			if prisoner.Cidr == cidr {
 				return true, cId, pId
@@ -140,12 +140,12 @@ func isSubRange(cidr1, cidr2 string) bool {
 	return ip1u >= ip2u && end1u <= end2u
 }
 
-func (jail *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
+func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 	var matchedCells []int
 	var matchedPrisoners []int
 	found := false
 
-	for cellIdx, cell := range jail.Cells {
+	for cellIdx, cell := range j.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
 			if isSubRange(prisoner.Cidr, cidr) {
 				matchedCells = append(matchedCells, cellIdx)
@@ -157,8 +157,8 @@ func (jail *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 	return found, matchedCells, matchedPrisoners
 }
 
-func (jail *Jail) ParentRangeInJail(cidr string) (bool, int, int) {
-	for cellIdx, cell := range jail.Cells {
+func (j *Jail) ParentRangeInJail(cidr string) (bool, int, int) {
+	for cellIdx, cell := range j.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
 			if isSubRange(cidr, prisoner.Cidr) {
 				return true, cellIdx, prisonerIdx
@@ -181,7 +181,7 @@ func maxInList(list []int) int {
 	return max
 }
 
-func (jail *Jail) Fill(cidr string) error {
+func (j *Jail) Fill(cidr string) error {
 	if cidr == "" {
 		return fmt.Errorf("empty CIDR string provided to Fill")
 	}
@@ -191,13 +191,13 @@ func (jail *Jail) Fill(cidr string) error {
 		return fmt.Errorf("error parsing CIDR %s: %w", cidr, err)
 	}
 
-	if inJail, cellIdx, prisonerIdx := jail.rangeInJail(cidr); inJail {
+	if inJail, cellIdx, prisonerIdx := j.rangeInJail(cidr); inJail {
 		// CIDR already in jail: move prisoner only if current ban is inactive
-		if !jail.Cells[cellIdx].Prisoners[prisonerIdx].BanActive {
-			MovePrisonerToNextCell(jail, cellIdx, prisonerIdx)
+		if !j.Cells[cellIdx].Prisoners[prisonerIdx].BanActive {
+			MovePrisonerToNextCell(j, cellIdx, prisonerIdx)
 		}
 
-	} else if present, cellIdxs, prisonerIdxs := jail.SubRangesInJail(cidr); present {
+	} else if present, cellIdxs, prisonerIdxs := j.SubRangesInJail(cidr); present {
 		// Check if CIDR is a parent range to 1 or more ranges in jail
 		if present {
 			maxCellIdx := maxInList(cellIdxs)
@@ -205,66 +205,66 @@ func (jail *Jail) Fill(cidr string) error {
 			banActive := true
 			for i := len(cellIdxs) - 1; i >= 0; i-- {
 				if cellIdxs[i] == maxCellIdx {
-					banActive = banActive || jail.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanActive
-					banStart = jail.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanStart
+					banActive = banActive || j.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanActive
+					banStart = j.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanStart
 				}
-				jail.RemovePrisoner(cellIdxs[i], prisonerIdxs[i])
+				j.RemovePrisoner(cellIdxs[i], prisonerIdxs[i])
 			}
 			if !banActive {
 				idx := maxCellIdx
-				if maxCellIdx < len(jail.Cells)-1 {
+				if maxCellIdx < len(j.Cells)-1 {
 					idx = maxCellIdx + 1
 				}
-				ThrowPrisonerInCell(jail, idx, Prisoner{
+				ThrowPrisonerInCell(j, idx, Prisoner{
 					Cidr:      cidr,
 					BanStart:  time.Now(),
 					BanActive: true,
 				})
 			} else {
-				ThrowPrisonerInCell(jail, maxCellIdx, Prisoner{
+				ThrowPrisonerInCell(j, maxCellIdx, Prisoner{
 					Cidr:      cidr,
 					BanStart:  banStart,
 					BanActive: true,
 				})
 			}
-			jail.AllCidrs = append(jail.AllCidrs, cidr)
+			j.AllCidrs = append(j.AllCidrs, cidr)
 
 		}
 
-	} else if parent, cellIdx, prisonerIdx := jail.ParentRangeInJail(cidr); parent {
+	} else if parent, cellIdx, prisonerIdx := j.ParentRangeInJail(cidr); parent {
 		// Check if range is a subrange to a range in jail
-		if !jail.Cells[cellIdx].Prisoners[prisonerIdx].BanActive {
-			MovePrisonerToNextCell(jail, cellIdx, prisonerIdx)
+		if !j.Cells[cellIdx].Prisoners[prisonerIdx].BanActive {
+			MovePrisonerToNextCell(j, cellIdx, prisonerIdx)
 		}
 	} else {
 		// If CIDR is not in jail, add it to the first cell
-		ThrowPrisonerInCell(jail, 0, Prisoner{
+		ThrowPrisonerInCell(j, 0, Prisoner{
 			Cidr:      cidr,
 			BanStart:  time.Now(),
 			BanActive: true,
 		})
-		jail.AllCidrs = append(jail.AllCidrs, cidr)
+		j.AllCidrs = append(j.AllCidrs, cidr)
 	}
 
 	return nil
 }
 
-func (jail *Jail) UpdateBanActiveStatus() {
-	for i := 0; i < len(jail.Cells); i++ {
-		for j := 0; j < len(jail.Cells[i].Prisoners); j++ {
-			if BanDurationIsOver(jail.Cells[i].Prisoners[j].BanStart, jail.Cells[i].BanDuration) {
-				jail.Cells[i].Prisoners[j].BanActive = false
+func (j *Jail) UpdateBanActiveStatus() {
+	for i := 0; i < len(j.Cells); i++ {
+		for k := 0; k < len(j.Cells[i].Prisoners); k++ {
+			if BanDurationIsOver(j.Cells[i].Prisoners[k].BanStart, j.Cells[i].BanDuration) {
+				j.Cells[i].Prisoners[k].BanActive = false
 			}
 		}
 	}
 }
 
-func (jail *Jail) Update(cidrs []string) error {
-	jail.UpdateBanActiveStatus()
+func (j *Jail) Update(cidrs []string) error {
+	j.UpdateBanActiveStatus()
 
 	var errs []error
 	for _, cidr := range cidrs {
-		if err := jail.Fill(cidr); err != nil {
+		if err := j.Fill(cidr); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -275,9 +275,9 @@ func (jail *Jail) Update(cidrs []string) error {
 }
 
 // retrieve active bans (cidrs) from the jail
-func (jail *Jail) ListActiveBans() []string {
+func (j *Jail) ListActiveBans() []string {
 	cidrs := []string{}
-	for _, cell := range jail.Cells {
+	for _, cell := range j.Cells {
 		for _, prisoner := range cell.Prisoners {
 			if prisoner.BanActive {
 				cidrs = append(cidrs, prisoner.Cidr)

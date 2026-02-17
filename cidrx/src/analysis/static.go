@@ -190,11 +190,13 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 
 		// Fast path for unfiltered data: use sorted insertion optimization
 		if !hasFilters {
+			// No filtering needed: all requests pass through
+			filteredRequests = requests
+
 			// Convert all IPs to uint32 for sorting and counting
 			ipUints := make([]uint32, len(requests))
 			for i, r := range requests {
 				ipUints[i] = iputils.IPToUint32(r.IP)
-				filteredRequests = append(filteredRequests, r)
 			}
 
 			// Sort for optimal cache locality and count identical IPs
@@ -453,7 +455,9 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 
 	// Update jail with filtered CIDRs (non-whitelisted ones + blacklisted User-Agent IPs)
 	if len(filteredJailCIDRs) > 0 {
-		jailInstance.Update(filteredJailCIDRs)
+		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
+			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
+		}
 
 		// Write updated jail back to file
 		err = jail.JailToFile(jailInstance, cfg.GetJailFile())
@@ -619,67 +623,6 @@ func processRequestsConcurrently(
 	return nil
 }
 
-// requestChunk represents a chunk of requests for parallel processing
-type requestChunk struct {
-	requests []ingestor.Request
-	start    int
-	end      int
-}
-
-// filterResult represents the result of filtering a single request
-type filterResult struct {
-	request         ingestor.Request
-	shouldInclude   bool
-	isWhitelistedUA bool
-	isBlacklistedUA bool
-}
-
-// filterWorker processes request chunks concurrently
-func filterWorker(
-	requestChan <-chan requestChunk,
-	resultChan chan<- filterResult,
-	trieConfig *config.TrieConfig,
-	startTime, endTime time.Time,
-	userAgentMatcher *cidr.UserAgentMatcher) {
-
-	for chunk := range requestChan {
-		for _, r := range chunk.requests {
-			result := filterResult{
-				request: r,
-			}
-
-			// Apply time filtering
-			if !startTime.IsZero() && r.Timestamp.Before(startTime) {
-				resultChan <- result
-				continue
-			}
-			if !endTime.IsZero() && r.Timestamp.After(endTime) {
-				resultChan <- result
-				continue
-			}
-
-			// Apply regex filtering (this is expensive and benefits from concurrency)
-			if !trieConfig.ShouldIncludeRequest(r) {
-				resultChan <- result
-				continue
-			}
-
-			// Check User-Agent patterns using ultra-fast exact matching
-			if userAgentMatcher != nil {
-				uaResult := userAgentMatcher.CheckUserAgent(r.UserAgent)
-				result.isWhitelistedUA = (uaResult == cidr.UserAgentWhitelist)
-				result.isBlacklistedUA = (uaResult == cidr.UserAgentBlacklist)
-			}
-
-			// Include in results if not whitelisted by User-Agent
-			if !result.isWhitelistedUA {
-				result.shouldInclude = true
-			}
-
-			resultChan <- result
-		}
-	}
-}
 
 // processRequestsSequentially provides optimized sequential processing for simple filtering cases
 func processRequestsSequentially(

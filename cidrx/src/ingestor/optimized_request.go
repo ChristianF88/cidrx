@@ -16,31 +16,6 @@ type OptimizedRequest struct {
 	Bytes     uint32
 }
 
-// ConvertToOptimized converts a regular Request to OptimizedRequest
-func (r *Request) ToOptimized() OptimizedRequest {
-	return OptimizedRequest{
-		Timestamp: r.Timestamp,
-		IP:        IPToUint32Fast(r.IP),
-		URI:       r.URI,
-		UserAgent: r.UserAgent,
-		Method:    r.Method,
-		Status:    r.Status,
-		Bytes:     r.Bytes,
-	}
-}
-
-// IPToUint32Fast converts net.IP to uint32 efficiently
-func IPToUint32Fast(ip []byte) uint32 {
-	if len(ip) == 4 {
-		// IPv4 address - direct conversion
-		return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-	} else if len(ip) == 16 {
-		// IPv4-mapped IPv6 address - extract last 4 bytes
-		return uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15])
-	}
-	return 0
-}
-
 // Uint32ToIPString converts uint32 back to IP string for output
 func Uint32ToIPString(ip uint32) string {
 	// Use a pre-allocated byte buffer for ultra-fast conversion

@@ -250,7 +250,10 @@ func TestFill_InvalidCIDR_DoesNotPanic(t *testing.T) {
 			t.Errorf("Fill panicked on invalid CIDR: %v", r)
 		}
 	}()
-	jail.Fill("invalid-cidr")
+	err := jail.Fill("invalid-cidr")
+	if err == nil {
+		t.Errorf("Expected error for invalid CIDR, got nil")
+	}
 	// Should not add to jail
 	for _, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
@@ -312,7 +315,10 @@ func TestFill_AddsNewPrisonerToFirstCell(t *testing.T) {
 
 func TestFill_DoesNotAddInvalidCIDR(t *testing.T) {
 	jail := NewJail()
-	jail.Fill("invalid-cidr")
+	err := jail.Fill("invalid-cidr")
+	if err == nil {
+		t.Errorf("Expected error for invalid CIDR, got nil")
+	}
 	for _, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
 			if prisoner.Cidr == "invalid-cidr" {

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net"
 	"time"
-
-	"github.com/ChristianF88/cidrx/config"
 )
 
 type Cell struct {
@@ -78,7 +76,7 @@ func NewJail() Jail {
 	}
 }
 
-func (jail Jail) rangeInJail(cidr string) (bool, int, int) {
+func (jail *Jail) rangeInJail(cidr string) (bool, int, int) {
 	for cId, cell := range jail.Cells {
 		for pId, prisoner := range cell.Prisoners {
 			if prisoner.Cidr == cidr {
@@ -93,17 +91,15 @@ func BanDurationIsOver(banStart time.Time, banDuration time.Duration) bool {
 	return time.Since(banStart) > banDuration
 }
 
-// Fix logic from here on
 func ThrowPrisonerInCell(jail *Jail, cellIndex int, prisoner Prisoner) {
+	if cellIndex < 0 || cellIndex >= len(jail.Cells) {
+		return
+	}
 	prisoner.BanStart = time.Now()
 	prisoner.BanActive = true
-	if cellIndex < len(jail.Cells) {
-		jail.Cells[cellIndex].Prisoners = append(
-			jail.Cells[cellIndex].Prisoners, prisoner,
-		)
-	} else {
-		fmt.Printf("Cell index %d out of bounds for jail with %d cells\n", cellIndex, len(jail.Cells))
-	}
+	jail.Cells[cellIndex].Prisoners = append(
+		jail.Cells[cellIndex].Prisoners, prisoner,
+	)
 }
 
 func MovePrisonerToNextCell(jail *Jail, cellIndex int, prisonerIndex int) {
@@ -144,7 +140,7 @@ func isSubRange(cidr1, cidr2 string) bool {
 	return ip1u >= ip2u && end1u <= end2u
 }
 
-func (jail Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
+func (jail *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 	var matchedCells []int
 	var matchedPrisoners []int
 	found := false
@@ -161,8 +157,8 @@ func (jail Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 	return found, matchedCells, matchedPrisoners
 }
 
-func (Jail Jail) ParentRangeInJail(cidr string) (bool, int, int) {
-	for cellIdx, cell := range Jail.Cells {
+func (jail *Jail) ParentRangeInJail(cidr string) (bool, int, int) {
+	for cellIdx, cell := range jail.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
 			if isSubRange(cidr, prisoner.Cidr) {
 				return true, cellIdx, prisonerIdx
@@ -185,17 +181,14 @@ func maxInList(list []int) int {
 	return max
 }
 
-func (jail *Jail) Fill(cidr string) {
-	// Validate CIDR string is not empty or nil
+func (jail *Jail) Fill(cidr string) error {
 	if cidr == "" {
-		fmt.Printf("Error: Empty CIDR string provided to Fill function\n")
-		return
+		return fmt.Errorf("empty CIDR string provided to Fill")
 	}
 
 	_, _, err := net.ParseCIDR(cidr)
 	if err != nil {
-		fmt.Printf("error parsing CIDR %s: %v\n", cidr, err)
-		return
+		return fmt.Errorf("error parsing CIDR %s: %w", cidr, err)
 	}
 
 	if inJail, cellIdx, prisonerIdx := jail.rangeInJail(cidr); inJail {
@@ -253,6 +246,7 @@ func (jail *Jail) Fill(cidr string) {
 		jail.AllCidrs = append(jail.AllCidrs, cidr)
 	}
 
+	return nil
 }
 
 func (jail *Jail) UpdateBanActiveStatus() {
@@ -265,19 +259,19 @@ func (jail *Jail) UpdateBanActiveStatus() {
 	}
 }
 
-// this func needs to be smarter and possibly combine cidr ranges, or should this happen later?
-func (jail *Jail) Update(cidrs []string) {
-
+func (jail *Jail) Update(cidrs []string) error {
 	jail.UpdateBanActiveStatus()
 
-	// Write the jail to the file
+	var errs []error
 	for _, cidr := range cidrs {
-		jail.Fill(cidr)
+		if err := jail.Fill(cidr); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	err := JailToFile(*jail, config.JailFile)
-	if err != nil {
-		fmt.Printf("Error writing jail to file: %v\n", err)
+	if len(errs) > 0 {
+		return fmt.Errorf("jail update encountered %d errors, first: %w", len(errs), errs[0])
 	}
+	return nil
 }
 
 // retrieve active bans (cidrs) from the jail

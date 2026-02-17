@@ -474,7 +474,9 @@ func executeLiveAnalysis(cfg *config.Config) {
 			mergedCIDRs = append(mergedCIDRs, ipNet.String())
 		}
 
-		jailInstance.Update(mergedCIDRs)
+		if err := jailInstance.Update(mergedCIDRs); err != nil {
+			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
+		}
 		jail.JailToFile(jailInstance, cfg.GetJailFile())
 		jail.WriteBanFile(cfg.GetBanFile(), jailInstance.ListActiveBans())
 

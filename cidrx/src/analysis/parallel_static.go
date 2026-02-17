@@ -76,10 +76,6 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 		return jsonOutput, requests, nil
 	}
 
-	// Load global User-Agent whitelist/blacklist patterns
-	globalUserAgentWhitelistIPSet := make(map[string]bool)
-	globalUserAgentBlacklistIPSet := make(map[string]bool)
-
 	// Process tries in parallel
 	var trieWG sync.WaitGroup
 	var triesMutex sync.Mutex
@@ -132,14 +128,11 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	// Add results to output
 	jsonOutput.Tries = trieResults
 
-	// Load and store global whitelist/blacklist IPs
-	if err := loadGlobalUserAgentLists(cfg, jsonOutput, globalUserAgentWhitelistIPSet, globalUserAgentBlacklistIPSet); err != nil {
-		jsonOutput.AddWarning("useragent_lists_load", fmt.Sprintf("failed to load User-Agent lists: %v", err), 1)
-	}
-
-	// Jail processing (same as original)
-	if err := processJailActions(cfg, jsonOutput, globalUserAgentWhitelistIPSet, globalUserAgentBlacklistIPSet); err != nil {
-		jsonOutput.AddWarning("jail_processing", fmt.Sprintf("Jail processing failed: %v", err), 1)
+	// Process jail with whitelist/blacklist if configured
+	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
+		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
+			jsonOutput.AddError("jail_processing", fmt.Sprintf("failed to process jail with whitelist/blacklist: %v", err), 1)
+		}
 	}
 
 	jsonOutput.UpdateDuration(analysisStart)
@@ -227,8 +220,8 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	}
 
 	// Filter requests and collect IPs for batch insertion
-	var filteredRequests []ingestor.Request
-	var ipsToInsert []net.IP
+	filteredRequests := make([]ingestor.Request, 0, len(requests))
+	ipsToInsert := make([]net.IP, 0, len(requests))
 
 	// User-Agent tracking
 	userAgentWhitelistIPs := make([]string, 0)
@@ -368,26 +361,6 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	return trieResult
 }
 
-// Helper functions (copied from original with minor modifications for parallel trie)
-func loadGlobalUserAgentLists(cfg *config.Config, jsonOutput *output.JSONOutput,
-	globalWhitelistIPSet, globalBlacklistIPSet map[string]bool) error {
-	// Process jail with whitelist/blacklist if configured
-	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
-		// Always process jail to generate ban file from existing jail + new detections
-		err := ProcessJailWithWhitelist(cfg, jsonOutput)
-		if err != nil {
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("failed to process jail with whitelist/blacklist: %v", err), 1)
-		}
-	}
-	return nil
-}
-
-func processJailActions(cfg *config.Config, jsonOutput *output.JSONOutput,
-	globalWhitelistIPSet, globalBlacklistIPSet map[string]bool) error {
-	// This function is now handled in loadGlobalUserAgentLists to maintain compatibility
-	return nil
-}
-
 // processRequestsConcurrentlyParallel implements high-performance concurrent filtering
 func processRequestsConcurrentlyParallel(
 	requests []ingestor.Request,
@@ -416,8 +389,8 @@ func processRequestsConcurrentlyParallel(
 	}
 
 	// Channels for work distribution - smaller buffers reduce memory overhead
-	requestChan := make(chan parallelRequestChunk, numWorkers)
-	resultChan := make(chan parallelFilterResult, numWorkers*4)
+	requestChan := make(chan requestChunk, numWorkers)
+	resultChan := make(chan filterResult, numWorkers*4)
 
 	// Worker synchronization
 	var wg sync.WaitGroup
@@ -427,7 +400,7 @@ func processRequestsConcurrentlyParallel(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			parallelFilterWorker(requestChan, resultChan, trieConfig, startTime, endTime,
+			filterWorker(requestChan, resultChan, trieConfig, startTime, endTime,
 				userAgentMatcher)
 		}()
 	}
@@ -501,7 +474,7 @@ func processRequestsConcurrentlyParallel(
 			end = len(requests)
 		}
 
-		requestChan <- parallelRequestChunk{
+		requestChan <- requestChunk{
 			requests: requests[i:end],
 			start:    i,
 			end:      end,
@@ -678,64 +651,3 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 	}
 }
 
-// parallelRequestChunk represents a chunk of requests for parallel processing
-type parallelRequestChunk struct {
-	requests []ingestor.Request
-	start    int
-	end      int
-}
-
-// parallelFilterResult represents the result of filtering a single request
-type parallelFilterResult struct {
-	request         ingestor.Request
-	shouldInclude   bool
-	isWhitelistedUA bool
-	isBlacklistedUA bool
-}
-
-// parallelFilterWorker processes request chunks concurrently
-func parallelFilterWorker(
-	requestChan <-chan parallelRequestChunk,
-	resultChan chan<- parallelFilterResult,
-	trieConfig *config.TrieConfig,
-	startTime, endTime time.Time,
-	userAgentMatcher *cidr.UserAgentMatcher) {
-
-	for chunk := range requestChan {
-		for _, r := range chunk.requests {
-			result := parallelFilterResult{
-				request: r,
-			}
-
-			// Apply time filtering
-			if !startTime.IsZero() && r.Timestamp.Before(startTime) {
-				resultChan <- result
-				continue
-			}
-			if !endTime.IsZero() && r.Timestamp.After(endTime) {
-				resultChan <- result
-				continue
-			}
-
-			// Apply regex filtering (this is expensive and benefits from concurrency)
-			if !trieConfig.ShouldIncludeRequest(r) {
-				resultChan <- result
-				continue
-			}
-
-			// Check User-Agent patterns using ultra-fast exact matching
-			if userAgentMatcher != nil {
-				uaResult := userAgentMatcher.CheckUserAgent(r.UserAgent)
-				result.isWhitelistedUA = (uaResult == cidr.UserAgentWhitelist)
-				result.isBlacklistedUA = (uaResult == cidr.UserAgentBlacklist)
-			}
-
-			// Include in results if not whitelisted by User-Agent
-			if !result.isWhitelistedUA {
-				result.shouldInclude = true
-			}
-
-			resultChan <- result
-		}
-	}
-}

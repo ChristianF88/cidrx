@@ -16,10 +16,48 @@ type NumericCIDR struct {
 	PrefixLen uint8
 }
 
-// String converts NumericCIDR to string representation only when needed
+// String converts NumericCIDR to string representation only when needed.
+// Uses manual byte building to avoid fmt.Sprintf allocation overhead.
 func (nc NumericCIDR) String() string {
-	return fmt.Sprintf("%d.%d.%d.%d/%d",
-		byte(nc.IP>>24), byte(nc.IP>>16), byte(nc.IP>>8), byte(nc.IP), nc.PrefixLen)
+	// Max: "255.255.255.255/32" = 18 bytes
+	var buf [18]byte
+	pos := 0
+
+	pos = appendOctet(buf[:], pos, byte(nc.IP>>24))
+	buf[pos] = '.'
+	pos++
+	pos = appendOctet(buf[:], pos, byte(nc.IP>>16))
+	buf[pos] = '.'
+	pos++
+	pos = appendOctet(buf[:], pos, byte(nc.IP>>8))
+	buf[pos] = '.'
+	pos++
+	pos = appendOctet(buf[:], pos, byte(nc.IP))
+	buf[pos] = '/'
+	pos++
+	pos = appendOctet(buf[:], pos, nc.PrefixLen)
+
+	return string(buf[:pos])
+}
+
+func appendOctet(buf []byte, pos int, v byte) int {
+	if v >= 100 {
+		buf[pos] = '0' + v/100
+		pos++
+		buf[pos] = '0' + (v%100)/10
+		pos++
+		buf[pos] = '0' + v%10
+		pos++
+	} else if v >= 10 {
+		buf[pos] = '0' + v/10
+		pos++
+		buf[pos] = '0' + v%10
+		pos++
+	} else {
+		buf[pos] = '0' + v
+		pos++
+	}
+	return pos
 }
 
 // StringsToIPNets converts CIDR strings to IPNet objects
@@ -673,37 +711,3 @@ func (m *UserAgentMatcher) CountBlacklist() int {
 	return count
 }
 
-// Legacy functions for backward compatibility (deprecated)
-
-// CompileUserAgentPatterns creates a UserAgentMatcher for backward compatibility
-// Deprecated: Use NewUserAgentMatcher directly for better performance
-func CompileUserAgentPatterns(patterns []string) (*UserAgentMatcher, error) {
-	return NewUserAgentMatcher(patterns, nil), nil
-}
-
-// CompileUserAgentSubstrings is an alias for CompileUserAgentPatterns for backward compatibility
-// Deprecated: Use NewUserAgentMatcher directly for better performance
-func CompileUserAgentSubstrings(patterns []string) (*UserAgentMatcher, error) {
-	return CompileUserAgentPatterns(patterns)
-}
-
-// IsUserAgentWhitelisted checks if a User-Agent is whitelisted (legacy function)
-// Deprecated: Use UserAgentMatcher.IsWhitelisted for better performance
-func IsUserAgentWhitelisted(userAgent string, whitelistPatterns []string) bool {
-	if len(whitelistPatterns) == 0 {
-		return false
-	}
-
-	// Create matcher and check
-	matcher := NewUserAgentMatcher(whitelistPatterns, nil)
-	return matcher.IsWhitelisted(userAgent)
-}
-
-// IsUserAgentWhitelistedCompiled checks if a User-Agent is whitelisted using pre-compiled matcher
-// Updated to work with new UserAgentMatcher
-func IsUserAgentWhitelistedCompiled(userAgent string, matcher *UserAgentMatcher) bool {
-	if matcher == nil {
-		return false
-	}
-	return matcher.IsWhitelisted(userAgent)
-}

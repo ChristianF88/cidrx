@@ -84,18 +84,8 @@ func BenchmarkUserAgentMatcher_Creation(b *testing.B) {
 		}
 	})
 
-	// Legacy comparison (if old implementation was available)
-	b.Run("LegacyCompileUserAgentPatterns", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			matcher, err := CompileUserAgentPatterns(whitelist)
-			if err != nil {
-				b.Fatal(err)
-			}
-			_ = matcher
-		}
-	})
 }
+
 
 // BenchmarkUserAgentMatcher_Lookup compares lookup performance
 func BenchmarkUserAgentMatcher_Lookup(b *testing.B) {
@@ -145,23 +135,6 @@ func BenchmarkUserAgentMatcher_Lookup(b *testing.B) {
 		}
 	})
 
-	b.Run("LegacyIsUserAgentWhitelisted", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			userAgent := testCases[i%len(testCases)]
-			result := IsUserAgentWhitelisted(userAgent, whitelist)
-			_ = result
-		}
-	})
-
-	b.Run("LegacyIsUserAgentWhitelistedCompiled", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			userAgent := testCases[i%len(testCases)]
-			result := IsUserAgentWhitelistedCompiled(userAgent, matcher)
-			_ = result
-		}
-	})
 }
 
 // BenchmarkUserAgentMatcher_ScaleComparison tests performance at different scales
@@ -189,13 +162,6 @@ func BenchmarkUserAgentMatcher_ScaleComparison(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("LegacyMatcher_Scale_%d", scale), func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				result := IsUserAgentWhitelisted(testAgent, whitelist)
-				_ = result
-			}
-		})
 	}
 }
 
@@ -346,15 +312,6 @@ func BenchmarkUserAgentMatcher_RealWorldPatterns(b *testing.B) {
 		}
 	})
 
-	// Compare with legacy
-	b.Run("RealWorld_Legacy", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			userAgent := testCases[i%len(testCases)]
-			result := IsUserAgentWhitelisted(userAgent, whitelist)
-			_ = result
-		}
-	})
 }
 
 // BenchmarkUserAgentMatcher_StringOperations tests string operation overhead
@@ -432,4 +389,22 @@ func generateNestedCIDRs(count int) []*net.IPNet {
 	}
 
 	return nets
+}
+
+// BenchmarkNumericCIDR_String benchmarks the NumericCIDR.String() method
+func BenchmarkNumericCIDR_String(b *testing.B) {
+	testCases := []NumericCIDR{
+		{IP: 0x0A000000, PrefixLen: 8},   // 10.0.0.0/8
+		{IP: 0xC0A80100, PrefixLen: 24},  // 192.168.1.0/24
+		{IP: 0xFFFFFFFF, PrefixLen: 32},  // 255.255.255.255/32
+		{IP: 0x01020304, PrefixLen: 16},  // 1.2.3.4/16
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		nc := testCases[i%len(testCases)]
+		s := nc.String()
+		_ = s
+	}
 }

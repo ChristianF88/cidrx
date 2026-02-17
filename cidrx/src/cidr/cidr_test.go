@@ -1044,49 +1044,6 @@ func TestUserAgentMatcher_Unicode(t *testing.T) {
 	}
 }
 
-// TestLegacyCompatibility tests that legacy functions still work
-func TestLegacyCompatibility(t *testing.T) {
-	patterns := []string{"Mozilla/5.0", "Googlebot/2.1"}
-
-	// Test CompileUserAgentPatterns
-	matcher, err := CompileUserAgentPatterns(patterns)
-	if err != nil {
-		t.Fatalf("CompileUserAgentPatterns failed: %v", err)
-	}
-
-	if matcher == nil {
-		t.Fatal("Expected non-nil matcher from CompileUserAgentPatterns")
-	}
-
-	// Test CompileUserAgentSubstrings (alias)
-	matcher2, err := CompileUserAgentSubstrings(patterns)
-	if err != nil {
-		t.Fatalf("CompileUserAgentSubstrings failed: %v", err)
-	}
-
-	if matcher2 == nil {
-		t.Fatal("Expected non-nil matcher from CompileUserAgentSubstrings")
-	}
-
-	// Test IsUserAgentWhitelisted
-	if !IsUserAgentWhitelisted("Mozilla/5.0", patterns) {
-		t.Error("IsUserAgentWhitelisted should return true for Mozilla/5.0")
-	}
-
-	if IsUserAgentWhitelisted("sqlmap/1.0", patterns) {
-		t.Error("IsUserAgentWhitelisted should return false for sqlmap/1.0")
-	}
-
-	// Test IsUserAgentWhitelistedCompiled
-	if !IsUserAgentWhitelistedCompiled("Mozilla/5.0", matcher) {
-		t.Error("IsUserAgentWhitelistedCompiled should return true for Mozilla/5.0")
-	}
-
-	if IsUserAgentWhitelistedCompiled("sqlmap/1.0", matcher) {
-		t.Error("IsUserAgentWhitelistedCompiled should return false for sqlmap/1.0")
-	}
-}
-
 // TestUserAgentMatcher_CommentsAndWhitespace tests proper handling of comments and whitespace
 func TestUserAgentMatcher_CommentsAndWhitespace(t *testing.T) {
 	whitelist := []string{

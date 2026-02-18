@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -40,13 +39,12 @@ type OutputConfig struct {
 
 // Static is the unified static analysis function - handles all static analysis cases
 func Static(logFile, logFormat string, startTime, endTime time.Time, useragentRegex, endpointRegex string,
-	clusterArgSets []string, rangesCidr []string, plotPath string, compact, plain, tui bool) {
+	clusterArgSets []string, rangesCidr []string, plotPath string, compact, plain, tui bool) error {
 
 	// Create config.Config directly from CLI parameters - no intermediate structs
 	cfg, err := createConfigFromCLI(logFile, logFormat, startTime, endTime, useragentRegex, endpointRegex, clusterArgSets, rangesCidr, plotPath)
 	if err != nil {
-		fmt.Printf(`{"error": "%v"}`, err)
-		return
+		return fmt.Errorf("creating config from CLI: %w", err)
 	}
 
 	outputConfig := OutputConfig{
@@ -56,11 +54,11 @@ func Static(logFile, logFormat string, startTime, endTime time.Time, useragentRe
 	}
 
 	// Use the same execution path regardless of input source
-	executeStaticAnalysis(cfg, outputConfig)
+	return executeStaticAnalysis(cfg, outputConfig)
 }
 
 // StaticFromConfig runs static analysis from config file
-func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) {
+func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) error {
 	outputConfig := OutputConfig{
 		Compact: compact,
 		Plain:   plain,
@@ -68,19 +66,18 @@ func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) {
 	}
 
 	// Use the same execution path regardless of input source
-	executeStaticAnalysis(cfg, outputConfig)
+	return executeStaticAnalysis(cfg, outputConfig)
 }
 
 // Live runs live mode analysis
-func Live(port, jailFile, banFile string, slidingWindowMaxTime time.Duration, slidingWindowMaxSize int, sleepBetweenIterations int) {
+func Live(port, jailFile, banFile string, slidingWindowMaxTime time.Duration, slidingWindowMaxSize int, sleepBetweenIterations int) error {
 	// Create config.Config directly from CLI parameters
 	cfg, err := createLiveConfigFromCLI(port, jailFile, banFile, slidingWindowMaxTime, slidingWindowMaxSize, sleepBetweenIterations)
 	if err != nil {
-		fmt.Printf(`{"error": "%v"}`, err)
-		return
+		return fmt.Errorf("creating live config from CLI: %w", err)
 	}
 
-	executeLiveAnalysis(cfg)
+	return executeLiveAnalysis(cfg)
 }
 
 // ============================================================================
@@ -88,33 +85,36 @@ func Live(port, jailFile, banFile string, slidingWindowMaxTime time.Duration, sl
 // ============================================================================
 
 // executeStaticAnalysis handles all static analysis - CLI or config file, doesn't matter
-func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) {
+func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error {
 	// Route to TUI if requested
 	if outputConfig.TUI {
-		executeTUI(cfg)
-		return
+		return executeTUI(cfg)
 	}
 
 	// Execute the actual analysis
 	result, requests, err := analysis.ParallelStaticFromConfigWithRequests(cfg)
 	if err != nil {
 		outputResult(result, outputConfig) // Output with errors
-		return
+		return fmt.Errorf("static analysis: %w", err)
 	}
 
 	// Generate heatmap if plotPath is provided - reuse parsed requests
 	if cfg.Static.PlotPath != "" && requests != nil {
 		plotStart := time.Now()
-		output.PlotHeatmap(requests, cfg.Static.PlotPath)
-		plotDuration := time.Since(plotStart)
-		result.AddWarning("info", fmt.Sprintf("Heatmap generated in %v at %s", plotDuration, cfg.Static.PlotPath), 0)
+		if err := output.PlotHeatmap(requests, cfg.Static.PlotPath); err != nil {
+			result.AddError("heatmap", fmt.Sprintf("failed to generate heatmap: %v", err), 1)
+		} else {
+			plotDuration := time.Since(plotStart)
+			result.AddWarning("info", fmt.Sprintf("Heatmap generated in %v at %s", plotDuration, cfg.Static.PlotPath), 0)
+		}
 	}
 
 	outputResult(result, outputConfig)
+	return nil
 }
 
 // executeTUI runs TUI mode - works for both CLI and config file inputs
-func executeTUI(cfg *config.Config) {
+func executeTUI(cfg *config.Config) error {
 	app := tui.NewAppFromConfig(cfg, "")
 
 	// Run the complete analysis first (like non-TUI mode), then pass results to TUI
@@ -143,8 +143,9 @@ func executeTUI(cfg *config.Config) {
 	}()
 
 	if err := app.Run(); err != nil {
-		fmt.Printf("TUI error: %v\n", err)
+		return fmt.Errorf("TUI: %w", err)
 	}
+	return nil
 }
 
 // ============================================================================
@@ -289,8 +290,8 @@ func parseClusterArguments(clusterArgSets []string) ([][]float64, []bool, error)
 // ============================================================================
 
 // LiveFromConfig runs live mode from config file
-func LiveFromConfig(cfg *config.Config) {
-	executeLiveAnalysis(cfg)
+func LiveFromConfig(cfg *config.Config) error {
+	return executeLiveAnalysis(cfg)
 }
 
 // slidingWindowInstance holds a sliding window and its associated configuration
@@ -301,9 +302,9 @@ type slidingWindowInstance struct {
 }
 
 // executeLiveAnalysis runs live mode analysis - works for both CLI and config file inputs
-func executeLiveAnalysis(cfg *config.Config) {
+func executeLiveAnalysis(cfg *config.Config) error {
 	if len(cfg.LiveTries) == 0 {
-		log.Fatalf("No LiveTries configurations found")
+		return fmt.Errorf("no LiveTries configurations found")
 	}
 
 	// Create sliding window instances - one per LiveTries entry
@@ -326,12 +327,12 @@ func executeLiveAnalysis(cfg *config.Config) {
 	)
 
 	if err != nil {
-		log.Fatalf("Error creating ingestor: %v", err)
+		return fmt.Errorf("creating ingestor: %w", err)
 	}
 
 	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
 	if err != nil {
-		log.Fatalf("Error reading jail file: %v\n", err)
+		return fmt.Errorf("reading jail file: %w", err)
 	}
 
 	// Output initial connection status as JSON
@@ -340,7 +341,7 @@ func executeLiveAnalysis(cfg *config.Config) {
 	outputJSON(initOutput)
 
 	if err := ingestor.Accept(); err != nil {
-		log.Fatalf("Error accepting connection: %v", err)
+		return fmt.Errorf("accepting connection: %w", err)
 	}
 
 	// Connection established
@@ -503,6 +504,7 @@ func executeLiveAnalysis(cfg *config.Config) {
 		// Sleep using maximum sleep time across all windows
 		time.Sleep(time.Duration(maxSleepTime) * time.Second)
 	}
+	return nil
 }
 
 // ============================================================================
@@ -531,7 +533,7 @@ func outputResult(jsonOutput *output.JSONOutput, outputConfig OutputConfig) {
 	}
 
 	if err != nil {
-		fmt.Printf(`{"error": "failed to marshal JSON output: %v"}`, err)
+		fmt.Fprintf(os.Stderr, "failed to marshal JSON output: %v\n", err)
 		return
 	}
 	fmt.Println(string(jsonBytes))

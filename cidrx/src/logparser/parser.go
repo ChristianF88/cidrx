@@ -118,10 +118,12 @@ func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.
 	defer file.Close()
 
 	// Get file size for pre-allocation estimate
-	stat, _ := file.Stat()
-	estimatedLines := int(stat.Size() / 200) // ~200 bytes per log line estimate
-	if estimatedLines < 1000 {
-		estimatedLines = 1000
+	estimatedLines := 1000
+	if stat, err := file.Stat(); err == nil {
+		estimatedLines = int(stat.Size() / 200) // ~200 bytes per log line estimate
+		if estimatedLines < 1000 {
+			estimatedLines = 1000
+		}
 	}
 
 	// Batched channels — each send/receive moves parseBatchSize items at once,
@@ -360,6 +362,7 @@ func (pp *ParallelParser) readChunkBatched(file *os.File, job chunkJob, fileSize
 	buffer := make([]byte, readSize)
 	n, err := file.ReadAt(buffer, job.start)
 	if err != nil && err != io.EOF {
+		fmt.Fprintf(os.Stderr, "readChunkBatched: ReadAt offset %d: %v\n", job.start, err)
 		return
 	}
 	buffer = buffer[:n]

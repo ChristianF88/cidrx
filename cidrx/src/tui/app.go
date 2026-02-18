@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,10 +91,26 @@ func NewApp(logFile string, clusterArgSets []string, rangesCidr []string, plotPa
 				continue
 			}
 
-			minClusterSize, _ := strconv.ParseFloat(clusterArgSets[i], 64)
-			minDepth, _ := strconv.ParseFloat(clusterArgSets[i+1], 64)
-			maxDepth, _ := strconv.ParseFloat(clusterArgSets[i+2], 64)
-			meanSubnetDifference, _ := strconv.ParseFloat(clusterArgSets[i+3], 64)
+			minClusterSize, err := strconv.ParseFloat(clusterArgSets[i], 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid minClusterSize %q: %v\n", clusterArgSets[i], err)
+				continue
+			}
+			minDepth, err := strconv.ParseFloat(clusterArgSets[i+1], 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid minDepth %q: %v\n", clusterArgSets[i+1], err)
+				continue
+			}
+			maxDepth, err := strconv.ParseFloat(clusterArgSets[i+2], 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid maxDepth %q: %v\n", clusterArgSets[i+2], err)
+				continue
+			}
+			meanSubnetDifference, err := strconv.ParseFloat(clusterArgSets[i+3], 64)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid meanSubnetDifference %q: %v\n", clusterArgSets[i+3], err)
+				continue
+			}
 
 			argSet := config.ClusterArgSet{
 				MinClusterSize:       uint32(minClusterSize),

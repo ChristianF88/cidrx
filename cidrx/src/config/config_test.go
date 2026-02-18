@@ -778,77 +778,68 @@ endpointRegex = "/admin/.*"
 }
 
 func TestInvalidRegexHandling(t *testing.T) {
-	testConfigContent := `
+	// Test that invalid useragent regex causes LoadConfig to return an error
+	testConfigContent1 := `
 [static.trie_1]
 useragentRegex = "[invalid regex"
 endpointRegex = "/api/.*"
-
-[static.trie_2]
-useragentRegex = ".*valid.*"
-endpointRegex = "*invalid regex"
 `
-
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "invalid_regex_config.toml")
-
-	err := os.WriteFile(configPath, []byte(testConfigContent), 0644)
+	configPath := filepath.Join(tmpDir, "invalid_ua_regex_config.toml")
+	err := os.WriteFile(configPath, []byte(testConfigContent1), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	config, err := LoadConfig(configPath)
+	_, err = LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("Expected LoadConfig to return error for invalid useragentRegex")
+	}
+
+	// Test that invalid endpoint regex causes LoadConfig to return an error
+	testConfigContent2 := `
+[static.trie_2]
+useragentRegex = ".*valid.*"
+endpointRegex = "*invalid regex"
+`
+	configPath2 := filepath.Join(tmpDir, "invalid_ep_regex_config.toml")
+	err = os.WriteFile(configPath2, []byte(testConfigContent2), 0644)
 	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
+		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// Test trie_1 - invalid useragent regex should be nil, valid endpoint regex should be compiled
-	trie1, exists := config.StaticTries["trie_1"]
+	_, err = LoadConfig(configPath2)
+	if err == nil {
+		t.Fatal("Expected LoadConfig to return error for invalid endpointRegex")
+	}
+
+	// Test that valid regex still works fine
+	testConfigContentValid := `
+[static.trie_valid]
+useragentRegex = ".*bot.*"
+endpointRegex = "/api/.*"
+`
+	configPathValid := filepath.Join(tmpDir, "valid_regex_config.toml")
+	err = os.WriteFile(configPathValid, []byte(testConfigContentValid), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPathValid)
+	if err != nil {
+		t.Fatalf("Expected LoadConfig to succeed for valid regex, got: %v", err)
+	}
+
+	trieValid, exists := cfg.StaticTries["trie_valid"]
 	if !exists {
-		t.Fatal("Expected trie_1 to exist")
+		t.Fatal("Expected trie_valid to exist")
 	}
 
-	if trie1.userAgentRegexCompiled != nil {
-		t.Error("Expected invalid useragent regex to not be compiled")
-	}
-
-	if trie1.endpointRegexCompiled == nil {
-		t.Error("Expected valid endpoint regex to be compiled")
-	}
-
-	// Test trie_2 - valid useragent regex should be compiled, invalid endpoint regex should be nil
-	trie2, exists := config.StaticTries["trie_2"]
-	if !exists {
-		t.Fatal("Expected trie_2 to exist")
-	}
-
-	if trie2.userAgentRegexCompiled == nil {
+	if trieValid.userAgentRegexCompiled == nil {
 		t.Error("Expected valid useragent regex to be compiled")
 	}
-
-	if trie2.endpointRegexCompiled != nil {
-		t.Error("Expected invalid endpoint regex to not be compiled")
-	}
-
-	// Test that requests still work with partially invalid regex
-	testRequest := ingestor.Request{
-		UserAgent: "some valid user agent",
-		URI:       "/api/test",
-		IP:        net.ParseIP("1.2.3.4"),
-	}
-
-	// trie_1 should accept (invalid user agent regex = no filtering, valid endpoint regex matches)
-	if !trie1.ShouldIncludeRequest(testRequest) {
-		t.Error("Expected trie_1 to accept request when useragent regex is invalid")
-	}
-
-	// trie_2 should reject (valid user agent regex doesn't match, invalid endpoint regex = no filtering)
-	testRequest2 := ingestor.Request{
-		UserAgent: "contains valid pattern",
-		URI:       "/api/test",
-		IP:        net.ParseIP("1.2.3.4"),
-	}
-	if !trie2.ShouldIncludeRequest(testRequest2) {
-		t.Error("Expected trie_2 to accept request when useragent regex matches and endpoint regex is invalid")
+	if trieValid.endpointRegexCompiled == nil {
+		t.Error("Expected valid endpoint regex to be compiled")
 	}
 }
 

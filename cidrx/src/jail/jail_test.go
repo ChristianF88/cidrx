@@ -285,6 +285,10 @@ func TestIsSubRange(t *testing.T) {
 		{"invalid", "192.168.1.0/24", false},
 		{"192.168.1.0/24", "invalid", false},
 		{"invalid", "invalid", false},
+		// IPv6 CIDRs should not panic, just return false
+		{"::1/128", "::0/0", false},
+		{"2001:db8::/32", "2001:db8::/16", false},
+		{"::1/128", "192.168.1.0/24", false},
 	}
 
 	for _, tt := range tests {

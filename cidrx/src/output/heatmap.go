@@ -2,7 +2,6 @@ package output
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/ChristianF88/cidrx/ingestor"
@@ -13,7 +12,7 @@ import (
 )
 
 // PlotHeatmap creates an interactive heatmap for /16 IP ranges (A.B.0.0/16)
-func PlotHeatmap(requests []ingestor.Request, filename string) {
+func PlotHeatmap(requests []ingestor.Request, filename string) error {
 	var counts [256][256]uint32
 
 	// Fast bucketing into A.B.0.0/16
@@ -103,15 +102,16 @@ func PlotHeatmap(requests []ingestor.Request, filename string) {
 
 	f, err := os.Create(filename)
 	if err != nil {
-		log.Fatalf("could not create file: %v", err)
+		return fmt.Errorf("could not create heatmap file %s: %w", filename, err)
 	}
 	defer f.Close()
 
 	if err := page.Render(f); err != nil {
-		log.Fatalf("rendering error: %v", err)
+		return fmt.Errorf("rendering heatmap: %w", err)
 	}
 
 	fmt.Printf("Heatmap saved to %s\n", filename)
+	return nil
 }
 
 // makeRange creates an integer slice [min..max]

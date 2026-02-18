@@ -85,13 +85,13 @@ func FileToJail(filename string) (Jail, error) {
 	return jail, nil
 }
 
-func ReadBanFile(filename string) []string {
+func ReadBanFile(filename string) ([]string, error) {
 	// Read the file line by line and return array of cidrs
 	// ignore lines that start with '# '
 
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("opening ban file %s: %w", filename, err)
 	}
 	defer file.Close()
 	var cidrs []string
@@ -112,9 +112,9 @@ func ReadBanFile(filename string) []string {
 		cidrs = append(cidrs, line)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("reading ban file %s: %w", filename, err)
 	}
-	return cidrs
+	return cidrs, nil
 }
 
 func WriteBanFile(filename string, cidrs []string) error {

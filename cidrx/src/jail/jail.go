@@ -130,11 +130,16 @@ func isSubRange(cidr1, cidr2 string) bool {
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	ip1u := binary.BigEndian.Uint32(ip1.To4())
+	ip1v4 := ip1.To4()
+	ip2v4 := ip2.To4()
+	if ip1v4 == nil || ip2v4 == nil {
+		return false // IPv6 not supported
+	}
+	ip1u := binary.BigEndian.Uint32(ip1v4)
 	mask1u := binary.BigEndian.Uint32(net1.Mask)
 	end1u := ip1u | ^mask1u
 
-	ip2u := binary.BigEndian.Uint32(ip2.To4())
+	ip2u := binary.BigEndian.Uint32(ip2v4)
 	mask2u := binary.BigEndian.Uint32(net2.Mask)
 	end2u := ip2u | ^mask2u
 

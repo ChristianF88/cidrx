@@ -198,7 +198,11 @@ func validatePlotPath(plotPath string) error {
 	if plotPath != "" {
 		plotDir := filepath.Dir(plotPath)
 		if plotDir == "." {
-			plotDir, _ = os.Getwd()
+			var err error
+			plotDir, err = os.Getwd()
+			if err != nil {
+				return fmt.Errorf("getting working directory: %w", err)
+			}
 		}
 		if _, err := os.Stat(plotDir); os.IsNotExist(err) {
 			return fmt.Errorf("plot directory does not exist: %s", plotDir)
@@ -267,8 +271,7 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	}
 
 	fmt.Println("Running in live mode from config file:")
-	LiveFromConfig(cfg)
-	return nil
+	return LiveFromConfig(cfg)
 }
 
 // handleLiveFlagsMode handles live command when using CLI flags only
@@ -284,7 +287,7 @@ func handleLiveFlagsMode(c *cli.Context) error {
 	}
 
 	fmt.Println("Running in live mode with CLI flags:")
-	Live(
+	return Live(
 		c.String("port"),
 		c.String("jailFile"),
 		c.String("banFile"),
@@ -292,7 +295,6 @@ func handleLiveFlagsMode(c *cli.Context) error {
 		c.Int("slidingWindowMaxSize"),
 		c.Int("sleepBetweenIterations"),
 	)
-	return nil
 }
 
 // handleStaticCommand processes the static command with proper separation of concerns
@@ -332,8 +334,7 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 	}
 
 	// Use unified static interface
-	StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
-	return nil
+	return StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
 }
 
 // handleStaticFlagsMode handles static command when using CLI flags only
@@ -386,7 +387,7 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	}
 
 	// Use unified static interface
-	Static(
+	return Static(
 		c.String("logfile"),
 		c.String("logFormat"),
 		st,
@@ -400,7 +401,6 @@ func handleStaticFlagsMode(c *cli.Context) error {
 		c.Bool("plain"),
 		c.Bool("tui"),
 	)
-	return nil
 }
 
 var App = &cli.App{

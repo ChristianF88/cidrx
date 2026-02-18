@@ -116,7 +116,10 @@ func LoadConfig(configPath string) (*Config, error) {
 					// Skip static configuration fields and only process trie configurations
 					if subKey != "logFormat" && subKey != "logFile" && subKey != "plotPath" {
 						if trieMap, ok := subValue.(map[string]any); ok {
-							trieConfig := parseTrieConfig(trieMap)
+							trieConfig, err := parseTrieConfig(trieMap)
+							if err != nil {
+								return nil, fmt.Errorf("parsing trie config %q: %w", subKey, err)
+							}
 							if trieConfig != nil {
 								config.StaticTries[subKey] = trieConfig
 							}
@@ -132,7 +135,10 @@ func LoadConfig(configPath string) (*Config, error) {
 					// Skip live configuration fields and only process trie configurations
 					if subKey != "port" && subKey != "slidingWindowMaxTime" && subKey != "slidingWindowMaxSize" && subKey != "sleepBetweenIterations" {
 						if trieMap, ok := subValue.(map[string]any); ok {
-							trieConfig := parseSlidingTrieConfig(trieMap)
+							trieConfig, err := parseSlidingTrieConfig(trieMap)
+							if err != nil {
+								return nil, fmt.Errorf("parsing sliding trie config %q: %w", subKey, err)
+							}
 							if trieConfig != nil {
 								config.LiveTries[subKey] = trieConfig
 							}
@@ -204,22 +210,26 @@ func parseLiveConfig(m map[string]any) *LiveConfig {
 	return config
 }
 
-func parseTrieConfig(m map[string]any) *TrieConfig {
+func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
 	config := &TrieConfig{}
 	if v, ok := m["useragentRegex"].(string); ok {
 		config.UserAgentRegex = v
 		if v != "" {
-			if compiled, err := regexp.Compile(v); err == nil {
-				config.userAgentRegexCompiled = compiled
+			compiled, err := regexp.Compile(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid useragentRegex %q: %w", v, err)
 			}
+			config.userAgentRegexCompiled = compiled
 		}
 	}
 	if v, ok := m["endpointRegex"].(string); ok {
 		config.EndpointRegex = v
 		if v != "" {
-			if compiled, err := regexp.Compile(v); err == nil {
-				config.endpointRegexCompiled = compiled
+			compiled, err := regexp.Compile(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid endpointRegex %q: %w", v, err)
 			}
+			config.endpointRegexCompiled = compiled
 		}
 	}
 	if v, ok := m["startTime"].(string); ok {
@@ -284,31 +294,37 @@ func parseTrieConfig(m map[string]any) *TrieConfig {
 			}
 		}
 	}
-	return config
+	return config, nil
 }
 
-func parseSlidingTrieConfig(m map[string]any) *SlidingTrieConfig {
+func parseSlidingTrieConfig(m map[string]any) (*SlidingTrieConfig, error) {
 	config := &SlidingTrieConfig{}
 	if v, ok := m["useragentRegex"].(string); ok {
 		config.UserAgentRegex = v
 		if v != "" {
-			if compiled, err := regexp.Compile(v); err == nil {
-				config.userAgentRegexCompiled = compiled
+			compiled, err := regexp.Compile(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid useragentRegex %q: %w", v, err)
 			}
+			config.userAgentRegexCompiled = compiled
 		}
 	}
 	if v, ok := m["endpointRegex"].(string); ok {
 		config.EndpointRegex = v
 		if v != "" {
-			if compiled, err := regexp.Compile(v); err == nil {
-				config.endpointRegexCompiled = compiled
+			compiled, err := regexp.Compile(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid endpointRegex %q: %w", v, err)
 			}
+			config.endpointRegexCompiled = compiled
 		}
 	}
 	if v, ok := m["slidingWindowMaxTime"].(string); ok {
-		if duration, err := time.ParseDuration(v); err == nil {
-			config.SlidingWindowMaxTime = duration
+		duration, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid slidingWindowMaxTime %q: %w", v, err)
 		}
+		config.SlidingWindowMaxTime = duration
 	}
 	if v, ok := m["slidingWindowMaxSize"].(int64); ok {
 		config.SlidingWindowMaxSize = int(v)
@@ -353,7 +369,7 @@ func parseSlidingTrieConfig(m map[string]any) *SlidingTrieConfig {
 			}
 		}
 	}
-	return config
+	return config, nil
 }
 
 func (c *Config) GetJailFile() string {

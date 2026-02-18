@@ -76,7 +76,10 @@ func TestReadBanFile(t *testing.T) {
 	}
 
 	// Read the file using ReadBanFile
-	cidrs := ReadBanFile(filename)
+	cidrs, err := ReadBanFile(filename)
+	if err != nil {
+		t.Fatalf("ReadBanFile failed: %v", err)
+	}
 
 	// Expected CIDRs
 	expected := []string{"192.168.1.0/24", "10.0.0.0/8", "172.16.0.0/12"}
@@ -92,6 +95,16 @@ func TestReadBanFile(t *testing.T) {
 	}
 
 	// No manual cleanup needed - t.TempDir() handles it automatically
+}
+
+func TestReadBanFile_NonExistentFile(t *testing.T) {
+	cidrs, err := ReadBanFile("/nonexistent/path/to/banfile.txt")
+	if err == nil {
+		t.Errorf("Expected error for non-existent file, got nil")
+	}
+	if cidrs != nil {
+		t.Errorf("Expected nil cidrs for non-existent file, got %v", cidrs)
+	}
 }
 
 func TestWriteBanFile(t *testing.T) {

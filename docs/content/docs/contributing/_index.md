@@ -9,12 +9,12 @@ weight: 500
 toc: false
 seo:
   title: "Contributing to cidrx"
-  description: "Contribute to the cidrx botnet detection tool"
+  description: "Contribute to the cidrx IP clustering tool"
   canonical: ""
   noindex: false
 ---
 
-cidrx is an open-source botnet detection tool that welcomes contributions from the community. Whether you're fixing bugs, adding features, improving documentation, or optimizing performance, your help is appreciated.
+cidrx is an open-source IP clustering tool that welcomes contributions from the community. Whether you're fixing bugs, adding features, improving documentation, or optimizing performance, your help is appreciated.
 
 ## Getting Started
 

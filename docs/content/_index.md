@@ -7,20 +7,20 @@ lastmod: 2025-10-10T07:45:00+00:00
 draft: false
 seo:
   title: "cidrx - High-Performance IP Clustering"
-  description: "High-performance tool that clusters IP addresses into CIDR ranges at 1M+ requests/second. Ideal for botnet detection and log analysis."
+  description: "High-performance tool that clusters IP addresses into CIDR ranges at 1M+ requests/second. Ideal for IP clustering, blacklist generation, and log analysis."
   canonical: ""
   noindex: false
 ---
 
 ## What is cidrx?
 
-cidrx clusters IP addresses from HTTP logs into CIDR ranges at exceptional speed. By automatically grouping related IPs, it works well for botnet detection, attack pattern analysis, and network traffic investigation.
+cidrx clusters IP addresses from HTTP logs into CIDR ranges at exceptional speed. By automatically grouping related IPs, it works well for IP clustering, blacklist generation, and traffic analysis.
 
 ### Key Features
 
 - **Ultra-Fast**: 1M+ requests/second parsing and clustering
 - **Two Modes**: Static (historical logs) and Live (real-time protection)
-- **Smart Detection**: Multiple clustering strategies run simultaneously
+- **Smart Detection**: Multiple clustering configurations run simultaneously
 - **Flexible**: Regex filtering, whitelist/blacklist, time windows
 - **Multiple Outputs**: JSON, plain text, interactive TUI
 - **Blocklist Generation**: Inspired by *fail2ban* generates a blocklist of ranges for your firewall.
@@ -40,13 +40,13 @@ cidrx static --logfile /var/log/nginx/access.log \
 cidrx Analysis Results
 ──────────────────────────────────────────────────────────
 
-📊 ANALYSIS OVERVIEW
+ANALYSIS OVERVIEW
 Log File:        /var/log/nginx/access.log
 Total Requests:  1,046,826
 Parse Rate:      1,261,744 requests/sec
 Duration:        1156 ms
 
-🔍 CLUSTERING RESULTS
+CLUSTERING RESULTS
 
 Set 1: min_size=1000, depth=24-32, threshold=0.10
   20.171.207.2/32      1,574 requests  (  0.15%)

@@ -9,7 +9,7 @@ weight: 500
 toc: true
 seo:
   title: "Contributing to cidrx"
-  description: "Developer guide for contributing to the cidrx botnet detection tool"
+  description: "Developer guide for contributing to the cidrx IP clustering tool"
   canonical: ""
   noindex: false
 ---
@@ -35,13 +35,8 @@ go build -o cidrx .
 ### 3. Verify Setup
 
 ```bash
-# Run tests
 go test ./...
-
-# Run linter
 staticcheck ./...
-
-# Test binary
 ./cidrx --version
 ```
 
@@ -49,10 +44,12 @@ staticcheck ./...
 
 **cidrx is performance-critical.** All changes must maintain or improve these benchmarks:
 
-- **Parse Rate**: ≥1.3M requests/sec
-- **End-to-end Processing**: ≥1M requests/sec
+- **Parse Rate**: >=1.3M requests/sec
+- **End-to-end Processing**: >=1M requests/sec
 - **Cluster Detection**: <5ms for typical workloads
 - **Memory**: No unbounded growth
+
+See [Performance]({{< relref "/docs/architecture/performance/" >}}) for benchmarks and profiling.
 
 ## Development Workflow
 
@@ -93,15 +90,7 @@ go test -bench=. -benchmem ./... > bench-after.txt
 diff bench-before.txt bench-after.txt
 ```
 
-Example output:
-```
-BenchmarkParseLogLine-8    1373322    762 ns/op    256 B/op    8 allocs/op
-BenchmarkTrieInsert-8      5000000    112 ns/op     64 B/op    2 allocs/op
-```
-
 ### Real-World Performance Test
-
-Test with the reference dataset:
 
 ```bash
 cd cidrx/src
@@ -118,51 +107,16 @@ time go run . static --logfile /var/log/nginx/access.log \
 
 ## Testing
 
-### Run All Tests
-
 ```bash
-go test ./...
-```
-
-### Run with Coverage
-
-```bash
-go test -cover ./...
-```
-
-### Run Specific Package
-
-```bash
-go test ./logparser -v
-```
-
-### Test with Race Detector
-
-```bash
-go test -race ./...
+go test ./...               # Run all tests
+go test -cover ./...        # With coverage
+go test ./logparser -v      # Specific package
+go test -race ./...         # Race detector
 ```
 
 ## Code Quality
 
-### Required Checks
-
 Run before every commit:
-
-```bash
-# Format
-go fmt ./...
-
-# Vet
-go vet ./...
-
-# Static analysis (REQUIRED)
-staticcheck ./...
-
-# Tests
-go test ./...
-```
-
-### All Checks in One Command
 
 ```bash
 go fmt ./... && go vet ./... && staticcheck ./... && go test ./...
@@ -170,7 +124,7 @@ go fmt ./... && go vet ./... && staticcheck ./... && go test ./...
 
 ## Writing Tests
 
-### Test Conventions
+### Conventions
 
 - Place tests in `*_test.go` files
 - Use table-driven tests
@@ -219,8 +173,6 @@ func BenchmarkParseIPAddress(b *testing.B) {
 
 ## Pull Request Checklist
 
-Before submitting a PR:
-
 - [ ] Tests pass: `go test ./...`
 - [ ] Benchmarks run (for performance changes)
 - [ ] No performance regression
@@ -234,11 +186,19 @@ Before submitting a PR:
 ```
 cidrx/
 ├── cidrx/src/          # Main Go application
-│   ├── cli/            # CLI commands
+│   ├── analysis/       # Analysis orchestration
+│   ├── cidr/           # CIDR parsing utilities
+│   ├── cli/            # CLI commands and API
+│   ├── config/         # Configuration structs and loading
 │   ├── ingestor/       # Static/live mode ingestion
+│   ├── iputils/        # IP address utilities
+│   ├── jail/           # Ban/jail management
 │   ├── logparser/      # Log parsing
-│   ├── models/         # Data structures
+│   ├── output/         # Output formatting (JSON, plain, etc.)
+│   ├── pools/          # Memory pool management
+│   ├── sliding/        # Sliding window for live mode
 │   ├── trie/           # IP trie clustering
+│   ├── tui/            # Terminal user interface
 │   ├── version/        # Version info
 │   └── main.go
 ├── docs/               # Hugo documentation
@@ -247,6 +207,8 @@ cidrx/
 └── README.md
 ```
 
+See [Internals]({{< relref "/docs/architecture/internals/" >}}) for how these packages interact.
+
 ## Profiling
 
 ### CPU Profiling
@@ -254,12 +216,6 @@ cidrx/
 ```bash
 go test -cpuprofile=cpu.prof -bench=. ./logparser
 go tool pprof cpu.prof
-```
-
-In pprof:
-```
-(pprof) top10
-(pprof) list FunctionName
 ```
 
 ### Memory Profiling
@@ -281,20 +237,15 @@ go build -race -o cidrx .
 ### Delve Debugger
 
 ```bash
-# Install
 go install github.com/go-delve/delve/cmd/dlv@latest
-
-# Debug a test
 dlv test ./logparser -- -test.run TestParseLogLine
 ```
 
 ## Cleanup
 
-Remove build artifacts:
-
 ```bash
 cd cidrx/src
-rm -f cidrx cidrx
+rm -f cidrx
 rm -f *.prof *.out
 go clean -cache
 ```
@@ -309,34 +260,14 @@ go clean -cache
 
 ## Common Issues
 
-### Import errors
+**Import errors**: `go mod tidy && go mod download`
 
-```bash
-go mod tidy
-go mod download
-```
+**Stale test cache**: `go test -count=1 ./...`
 
-### Stale test cache
-
-```bash
-go test -count=1 ./...
-```
-
-### staticcheck not found
-
-```bash
-go install honnef.co/go/tools/cmd/staticcheck@latest
-# Ensure $(go env GOPATH)/bin is in PATH
-```
+**staticcheck not found**: `go install honnef.co/go/tools/cmd/staticcheck@latest` and ensure `$(go env GOPATH)/bin` is in PATH.
 
 ## Resources
 
 - [GitHub Repository](https://github.com/ChristianF88/cidrx)
 - [Issue Tracker](https://github.com/ChristianF88/cidrx/issues)
 - [Discussions](https://github.com/ChristianF88/cidrx/discussions)
-
-## Next Steps
-
-- Review [Architecture]({{< relref "/docs/advanced/architecture/" >}}) to understand internals
-- Check [Documentation Guide]({{< relref "/docs/contributing/documentation/" >}}) for docs changes
-- See [Performance]({{< relref "/docs/advanced/performance/" >}}) for optimization tips

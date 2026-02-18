@@ -3,7 +3,7 @@ title: "Documentation"
 description: "Guide for updating cidrx documentation"
 summary: "How to build and update the Hugo-based documentation site"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-10-09T10:00:00+00:00
+lastmod: 2025-11-26T10:00:00+00:00
 draft: false
 weight: 510
 toc: true
@@ -56,11 +56,17 @@ toc: true
 Controls page order (lower = first):
 
 - Getting Started: 100-120
-- Usage: 200-240
-- Configuration: 300-350
-- Advanced: 400-450
+- Reference: 200-260
+- Architecture: 400-420
 - Contributing: 500-550
-- Guides: 800-850
+- Guides: 800-840
+
+### Documentation Principles
+
+- **Single source of truth**: Parameter details live only in `reference/`. Guides link to them.
+- **Reference pages are exhaustive**: Every flag, format, and option documented.
+- **Guide pages are narrative**: Step-by-step walkthroughs that link to reference for details.
+- **No duplication**: Config examples, file formats, and parameter tables appear in exactly one place.
 
 ## Writing Content
 
@@ -80,22 +86,15 @@ Supported: `bash`, `go`, `toml`, `yaml`, `json`, `nginx`
 [Link Text]({{</* relref "/docs/section/page/" */>}})
 ```
 
-Examples:
-
-```markdown
-See [Installation]({{< relref "/docs/getting-started/installation/" >}})
-Learn about [Live Mode]({{< relref "/docs/usage/live-mode/" >}})
-```
-
 Always use trailing slash for section links.
 
-### Images
+### Cross-Referencing
+
+When writing guide content that mentions parameters, file formats, or config options, link to the canonical reference page instead of repeating the content:
 
 ```markdown
-![Alt text](/images/screenshot.png)
+See [Clustering]({{</* relref "/docs/reference/clustering/" */>}}) for parameter details.
 ```
-
-Place images in: `docs/static/images/`
 
 ## Common Tasks
 
@@ -112,20 +111,9 @@ hugo new content/docs/section/page-name.md
 2. Update `lastmod` date
 3. Test with `hugo server`
 
-### Add New Section
-
-```bash
-mkdir -p docs/content/docs/new-section
-hugo new content/docs/new-section/_index.md
-```
-
-Set appropriate weight in front matter.
-
 ## Deployment
 
 Documentation deploys automatically via GitHub Actions when pushed to `main`.
-
-Workflow: `.github/workflows/docs.yml`
 
 ## Documentation Checklist
 
@@ -133,9 +121,6 @@ Before submitting docs PR:
 
 - [ ] Ran `hugo server` and verified changes
 - [ ] Updated `lastmod` date
-- [ ] Tested all code examples
+- [ ] All `{{</* relref */>}}` links resolve
+- [ ] No content duplicated from reference pages
 - [ ] Used appropriate weight for ordering
-
-## Next Steps
-
-Return to [Contributing Overview]({{< relref "/docs/contributing/" >}}) for development workflow.

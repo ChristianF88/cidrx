@@ -1,56 +1,49 @@
 ---
 title: "Documentation"
-description: "cidrx Documentation - botnet detection and analysis"
+description: "cidrx Documentation - IP clustering and analysis"
 summary: "Comprehensive guides and documentation for cidrx"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-10-09T10:00:00+00:00
+lastmod: 2025-11-26T10:00:00+00:00
 draft: false
 weight: 999
 toc: true
 seo:
   title: "cidrx Documentation"
-  description: "Complete documentation for cidrx - botnet detection and IP clustering tool"
+  description: "Complete documentation for cidrx - IP clustering and analysis tool"
   canonical: ""
   noindex: false
 ---
 
-Welcome to the cidrx documentation. Here you'll find comprehensive guides and documentation to help you start working with cidrx as quickly as possible.
+Welcome to the cidrx documentation.
 
 ## Getting Started
-
-New to cidrx? Start here to learn the basics:
 
 - [Introduction]({{< relref "/docs/getting-started/introduction/" >}}) - What is cidrx and how it works
 - [Installation]({{< relref "/docs/getting-started/installation/" >}}) - How to install cidrx
 - [Quick Start]({{< relref "/docs/getting-started/quick-start/" >}}) - Get up and running in minutes
 
-## Usage
-
-Learn how to use cidrx effectively:
-
-- [Static Mode]({{< relref "/docs/usage/static-mode/" >}}) - Historical log analysis
-- [Live Mode]({{< relref "/docs/usage/live-mode/" >}}) - Real-time protection
-- [Docker Setup]({{< relref "/docs/usage/docker/" >}}) - Complete test environment
-- [Output Formats]({{< relref "/docs/usage/output/" >}}) - JSON, plain text, and TUI modes
-
-## Configuration
-
-Configure cidrx for your needs:
-
-- [Configuration Files]({{< relref "/docs/configuration/config-files/" >}}) - TOML configuration structure
-- [Log Formats]({{< relref "/docs/configuration/log-formats/" >}}) - Parsing Apache/Nginx logs
-- [Filtering]({{< relref "/docs/configuration/filtering/" >}}) - Whitelist, blacklist, and pattern matching
-- [Cluster Detection]({{< relref "/docs/configuration/clustering/" >}}) - Fine-tune attack detection
-
-## Advanced
-
-Deep dive into advanced features:
-
-- [Performance Tuning]({{< relref "/docs/advanced/performance/" >}}) - Optimize for your workload
-- [Architecture]({{< relref "/docs/advanced/architecture/" >}}) - How cidrx works under the hood
-
 ## Reference
 
-Technical reference documentation:
+- [CLI Flags]({{< relref "/docs/reference/cli-flags/" >}}) - Complete command-line interface reference
+- [Config File]({{< relref "/docs/reference/config-file/" >}}) - TOML configuration schema
+- [Log Formats]({{< relref "/docs/reference/log-formats/" >}}) - Format specifiers for parsing logs
+- [Clustering]({{< relref "/docs/reference/clustering/" >}}) - Detection parameters and tuning
+- [Filtering]({{< relref "/docs/reference/filtering/" >}}) - Whitelist, blacklist, regex, and time filters
+- [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) - JSON, plain text, compact JSON, and TUI
 
-- [CLI Reference](/docs/reference/cli-reference/) - Complete command-line interface documentation
+## Guides
+
+- [Static Analysis]({{< relref "/docs/guides/static-analysis/" >}}) - Historical log analysis walkthrough
+- [Live Protection]({{< relref "/docs/guides/live-protection/" >}}) - Real-time monitoring and automatic banning
+- [Docker Testing]({{< relref "/docs/guides/docker-testing/" >}}) - Docker-based test environment
+- [Detection Walkthrough]({{< relref "/docs/guides/botnet-detection/" >}}) - End-to-end detection scenario
+
+## Architecture
+
+- [Internals]({{< relref "/docs/architecture/internals/" >}}) - Pipeline, trie, jail system, and code organization
+- [Performance]({{< relref "/docs/architecture/performance/" >}}) - Benchmarks, memory, and optimization
+
+## Contributing
+
+- [Developer Guide]({{< relref "/docs/contributing/developer-guide/" >}}) - Development workflow, testing, and benchmarking
+- [Documentation]({{< relref "/docs/contributing/documentation/" >}}) - How to update the documentation site

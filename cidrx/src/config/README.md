@@ -7,7 +7,7 @@ Complete reference for cidrx configuration options, both CLI and TOML file forma
 cidrx supports two configuration approaches:
 
 1. **CLI Flags**: For quick one-off analysis
-2. **TOML Config File**: For complex scenarios with multiple detection strategies
+2. **TOML Config File**: For complex setups with multiple tries
 
 **Note**: CLI flags and config file are mutually exclusive. Use `--config` OR individual flags, not both.
 
@@ -38,7 +38,7 @@ Analyze historical log files.
 ```bash
 --startTime value       # Start time for analysis
                         # Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM
-                        # Example: --startTime "2025-01-15T10:00:00Z"
+                        # Example: --startTime "2025-01-15 10:00"
 
 --endTime value         # End time for analysis
                         # Same formats as startTime
@@ -93,8 +93,8 @@ Analyze historical log files.
 ./cidrx static \
   --logfile /var/log/nginx/access.log \
   --logFormat "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"" \
-  --startTime "2025-01-15T00:00:00Z" \
-  --endTime "2025-01-15T23:59:59Z" \
+  --startTime "2025-01-15" \
+  --endTime "2025-01-15 23:59" \
   --clusterArgSets 1000,24,32,0.1 \
   --clusterArgSets 5000,20,28,0.2 \
   --clusterArgSets 10000,16,24,0.3 \
@@ -199,12 +199,12 @@ Real-time traffic analysis with automatic banning.
 
 ## TOML Configuration File
 
-For complex scenarios with multiple detection strategies, use TOML configuration.
+For complex setups with multiple tries, use TOML configuration.
 
 ### File Structure
 
 ```toml
-[global]          # Global settings (required)
+[global]          # Global settings (required for live mode, optional for static mode)
 [static]          # Static mode settings (optional)
 [live]            # Live mode settings (optional)
 [static.NAME]     # Named static analysis trie (repeatable)
@@ -213,7 +213,7 @@ For complex scenarios with multiple detection strategies, use TOML configuration
 
 ### Global Configuration
 
-Required for both static and live modes.
+Required for live mode. Optional for static mode.
 
 ```toml
 [global]
@@ -226,10 +226,6 @@ whitelist = "/etc/cidrx/whitelist.txt"
 blacklist = "/etc/cidrx/blacklist.txt"
 userAgentWhitelist = "/etc/cidrx/ua_whitelist.txt"
 userAgentBlacklist = "/etc/cidrx/ua_blacklist.txt"
-
-# Optional logging (currently unused)
-logFile = "/var/log/cidrx.log"
-logLevel = "info"
 ```
 
 ### Static Mode Configuration
@@ -245,13 +241,13 @@ plotPath = "/tmp/heatmap.html"  # Optional
 
 #### Static Analysis Tries
 
-Each `[static.NAME]` section creates an independent analysis scenario.
+Each `[static.NAME]` section creates an independent trie.
 
 ```toml
 [static.trie_name]
 # Optional: Time range filtering
-startTime = 2025-01-15T00:00:00Z
-endTime = 2025-01-15T23:59:59Z
+startTime = "2025-01-15T00:00:00Z"
+endTime = "2025-01-15T23:59:59Z"
 
 # Optional: Pattern filtering
 useragentRegex = ".*bot.*|.*scanner.*"
@@ -260,7 +256,7 @@ endpointRegex = "/api/.*"
 # Optional: CIDR range analysis
 cidrRanges = ["203.0.113.0/24", "198.51.100.0/24"]
 
-# Required: Clustering parameters (array of arrays)
+# Optional: Clustering parameters (array of arrays)
 # Format: [minClusterSize, minDepth, maxDepth, meanSubnetDifference]
 clusterArgSets = [
     [1000, 24, 32, 0.1],
@@ -268,7 +264,7 @@ clusterArgSets = [
     [10000, 16, 24, 0.3]
 ]
 
-# Required: Jail usage flags (one per clusterArgSet)
+# Optional: Jail usage flags (one per clusterArgSet)
 # true = add detected CIDRs to jail, false = report only
 useForJail = [true, true, false]
 ```
@@ -301,8 +297,8 @@ useForJail = [true]
 
 [static.admin_attacks]
 endpointRegex = "/admin.*|/wp-admin.*|/phpmyadmin.*"
-startTime = 2025-01-15T00:00:00Z
-endTime = 2025-01-15T23:59:59Z
+startTime = "2025-01-15T00:00:00Z"
+endTime = "2025-01-15T23:59:59Z"
 clusterArgSets = [[50, 32, 32, 0.1]]
 useForJail = [true]
 
@@ -326,7 +322,7 @@ port = "8080"  # Required: Port to listen on
 
 #### Live Sliding Windows
 
-Each `[live.NAME]` section creates an independent sliding window with its own detection strategy.
+Each `[live.NAME]` section creates an independent sliding window with its own trie.
 
 ```toml
 [live.window_name]
@@ -429,7 +425,7 @@ Understanding the clustering parameter format: `[minClusterSize, minDepth, maxDe
    - Higher = less aggressive clustering (less sensitive)
    - Example: 0.1 = tight clustering, 0.3 = loose clustering
 
-### Common Clustering Strategies
+### Common Clustering Configurations
 
 ```toml
 # Large botnets (10,000+ IPs from /16-/24 ranges)
@@ -444,7 +440,7 @@ clusterArgSets = [[100, 28, 32, 0.05]]
 # Scanner detection (even single IPs)
 clusterArgSets = [[1, 32, 32, 0.05]]
 
-# Multi-tier detection (combine multiple strategies)
+# Multi-tier detection (combine multiple configurations)
 clusterArgSets = [
     [10000, 16, 24, 0.3],  # Large networks
     [1000, 24, 28, 0.2],   # Medium networks
@@ -529,8 +525,8 @@ Default log format for Apache/Nginx combined logs:
 ```bash
 ./cidrx static \
   --logfile access.log \
-  --startTime "2025-01-15T10:00:00Z" \
-  --endTime "2025-01-15T14:00:00Z" \
+  --startTime "2025-01-15 10:00" \
+  --endTime "2025-01-15 14:00" \
   --clusterArgSets 500,28,32,0.1 \
   --plain
 ```
@@ -547,7 +543,7 @@ Default log format for Apache/Nginx combined logs:
   --plain
 ```
 
-### Multi-Strategy Analysis with Config
+### Multi-Trie Analysis with Config
 
 ```bash
 ./cidrx static --config /etc/cidrx/production.toml --plain

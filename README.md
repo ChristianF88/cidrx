@@ -2,7 +2,7 @@
 
 High-performance botnet detection tool that analyzes HTTP logs and automatically identifies attack patterns by clustering IP addresses into CIDR ranges.
 
-**[📚 Full Documentation →](https://christianf88.github.io/cidrx/)**
+**[Full Documentation →](https://christianf88.github.io/cidrx/)**
 
 ## About
 
@@ -35,8 +35,8 @@ Analyze a log file and detect potential botnets:
 ```bash
 ./cidrx static \
   --logfile /var/log/nginx/access.log \
-  --startTime "2025-01-15T00:00:00Z" \
-  --endTime "2025-01-15T23:59:59Z" \
+  --startTime "2025-01-15" \
+  --endTime "2025-01-15 23:59" \
   --useragentRegex ".*bot.*|.*scanner.*" \
   --clusterArgSets 1000,24,32,0.1 \
   --plain
@@ -48,13 +48,13 @@ Analyze a log file and detect potential botnets:
                                cidrx Analysis Results
 ═══════════════════════════════════════════════════════════════════════════════
 
-📊 ANALYSIS OVERVIEW
+ANALYSIS OVERVIEW
 ────────────────────────────────────────────────────────────────────────────────
 Total Requests:  1,046,826
 Parse Rate:      1,373,322 requests/sec
 Duration:        1078 ms
 
-🔍 CLUSTERING RESULTS
+CLUSTERING RESULTS
 ────────────────────────────────────────────────────────────────────────────────
 Set 1: min_size=1000, depth=24-32, threshold=0.10
   45.40.50.192/26      3,083 requests  (  0.29%)
@@ -73,21 +73,21 @@ Set 1: min_size=1000, depth=24-32, threshold=0.10
 
 ## Learn More
 
-**📖 Documentation:** https://christianf88.github.io/cidrx/
+**Documentation:** https://christianf88.github.io/cidrx/
 
 - [Installation Guide](https://christianf88.github.io/cidrx/docs/getting-started/installation/) - Detailed setup
-- [Static Mode](https://christianf88.github.io/cidrx/docs/usage/static-mode/) - Historical analysis
-- [Live Mode](https://christianf88.github.io/cidrx/docs/usage/live-mode/) - Real-time protection
-- [Configuration](https://christianf88.github.io/cidrx/docs/configuration/config-files/) - TOML files and filtering
-- [Docker Setup](https://christianf88.github.io/cidrx/docs/usage/docker/) - Test environment
+- [Static Analysis Guide](https://christianf88.github.io/cidrx/docs/guides/static-analysis/) - Historical analysis
+- [Live Protection Guide](https://christianf88.github.io/cidrx/docs/guides/live-protection/) - Real-time protection
+- [Reference](https://christianf88.github.io/cidrx/docs/reference/) - CLI flags, config file, clustering, filtering
+- [Docker Testing](https://christianf88.github.io/cidrx/docs/guides/docker-testing/) - Test environment
 
 ## Features
 
-- ⚡ **Ultra-Fast**: 1M+ requests/sec parsing
-- 🔍 **Smart Detection**: Multiple clustering strategies
-- 🛡️ **Real-Time**: Live mode with automatic banning
-- 🎯 **Flexible**: Regex filtering, whitelist/blacklist
-- 📊 **Multiple Outputs**: JSON, plain text, interactive TUI
+- **Ultra-Fast**: 1M+ requests/sec parsing
+- **Smart Detection**: Multiple clustering configurations
+- **Real-Time**: Live mode with automatic banning
+- **Flexible**: Regex filtering, whitelist/blacklist
+- **Multiple Outputs**: JSON, plain text, interactive TUI
 
 ## License
 

@@ -497,10 +497,10 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 
 			for _, cidr := range clusterSet.MergedRanges {
 				content.WriteString(fmt.Sprintf("  • [red]%s[white]: %s requests (%.2f%%)\n",
-					cidr.CIDR, formatNumber(int(cidr.Requests)), cidr.Percentage))
+					cidr.CIDR, output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
 			}
 			content.WriteString(fmt.Sprintf("[yellow]Total: %s requests (%.2f%%)[white]\n",
-				formatNumber(int(totalRequests)), totalPercentage))
+				output.FormatNumber(int(totalRequests)), totalPercentage))
 		} else {
 			content.WriteString(fmt.Sprintf("\n[dim]Cluster Set %d: No ranges detected[white]\n", v.currentClusterSet+1))
 		}
@@ -573,20 +573,6 @@ func (v *VisualizationView) getBlockMarker(blockA, blockB, scale int, ipNet *net
 
 	// Return different dot sizes based on coverage
 	return v.getDotSize(coverage)
-}
-
-// helper funcs
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // calculateBlockCoverage returns the max of the A-axis and B-axis overlap fraction

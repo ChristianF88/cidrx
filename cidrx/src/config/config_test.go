@@ -102,8 +102,8 @@ useForJail = [true, false]
 		if trie1.EndpointRegex != "/api/.*" {
 			t.Errorf("Expected EndpointRegex to be '/api/.*', got '%s'", trie1.EndpointRegex)
 		}
-		if len(trie1.CidrRanges) != 2 {
-			t.Errorf("Expected 2 CIDR ranges, got %d", len(trie1.CidrRanges))
+		if len(trie1.CIDRRanges) != 2 {
+			t.Errorf("Expected 2 CIDR ranges, got %d", len(trie1.CIDRRanges))
 		}
 		if len(trie1.ClusterArgSets) != 2 {
 			t.Errorf("Expected 2 cluster arg sets, got %d", len(trie1.ClusterArgSets))
@@ -576,8 +576,8 @@ port = "8080"
 			t.Errorf("Expected EndTime to be nil, got %v", trie1.EndTime)
 		}
 		// Optional slice fields should be empty
-		if len(trie1.CidrRanges) != 0 {
-			t.Errorf("Expected CidrRanges to be empty, got %v", trie1.CidrRanges)
+		if len(trie1.CIDRRanges) != 0 {
+			t.Errorf("Expected CIDRRanges to be empty, got %v", trie1.CIDRRanges)
 		}
 		if len(trie1.ClusterArgSets) != 0 {
 			t.Errorf("Expected ClusterArgSets to be empty, got %v", trie1.ClusterArgSets)

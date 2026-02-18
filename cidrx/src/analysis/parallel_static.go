@@ -229,8 +229,8 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 				trieName, trieConfig.EndTime.Format(time.RFC3339), trieConfig.StartTime.Format(time.RFC3339)), 1)
 	}
 
-	// Set CidrRanges after null check
-	trieResult.Parameters.CidrRanges = trieConfig.CidrRanges
+	// Set CIDRRanges after null check
+	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
 
 	// Create parallel trie
 	trieInstance := trie.NewParallelTrie()
@@ -378,8 +378,8 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	}
 
 	// CIDR range analysis (same as original but with parallel trie)
-	if len(trieConfig.CidrRanges) > 0 {
-		for _, cidrRange := range trieConfig.CidrRanges {
+	if len(trieConfig.CIDRRanges) > 0 {
+		for _, cidrRange := range trieConfig.CIDRRanges {
 			count, err := trieInstance.ParallelCountInRange(cidrRange)
 			if err != nil {
 				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range '%s': %v", cidrRange, err), 1)

@@ -4,25 +4,26 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"slices"
 	"time"
 )
 
 type Cell struct {
-	Id          int
+	ID          int `json:"Id"`
 	Description string
 	BanDuration time.Duration
 	Prisoners   []Prisoner
 }
 
 type Prisoner struct {
-	Cidr      string
+	CIDR      string `json:"Cidr"`
 	BanStart  time.Time
 	BanActive bool
 }
 
 type Jail struct {
 	Cells    []Cell
-	AllCidrs []string // this is used to store all ranges that are in jail
+	AllCIDRs []string `json:"AllCidrs"` // all ranges currently in jail
 }
 
 func (j *Jail) RemovePrisoner(cellIdx, prisonerIdx int) {
@@ -34,7 +35,7 @@ func (j *Jail) RemovePrisoner(cellIdx, prisonerIdx int) {
 	}
 
 	// Get CIDR before removal
-	cidr := j.Cells[cellIdx].Prisoners[prisonerIdx].Cidr
+	cidr := j.Cells[cellIdx].Prisoners[prisonerIdx].CIDR
 
 	// Remove the prisoner from the cell
 	j.Cells[cellIdx].Prisoners = append(
@@ -43,11 +44,11 @@ func (j *Jail) RemovePrisoner(cellIdx, prisonerIdx int) {
 	)
 
 	// Remove the CIDR from the AllCidrs slice
-	for i, cidrInJail := range j.AllCidrs {
+	for i, cidrInJail := range j.AllCIDRs {
 		if cidrInJail == cidr {
-			j.AllCidrs = append(
-				j.AllCidrs[:i],
-				j.AllCidrs[i+1:]...,
+			j.AllCIDRs = append(
+				j.AllCIDRs[:i],
+				j.AllCIDRs[i+1:]...,
 			)
 			break
 		}
@@ -56,7 +57,7 @@ func (j *Jail) RemovePrisoner(cellIdx, prisonerIdx int) {
 
 func NewCell(id int, description string, banDuration time.Duration) Cell {
 	return Cell{
-		Id:          id,
+		ID:          id,
 		Description: description,
 		BanDuration: banDuration,
 		Prisoners:   []Prisoner{},
@@ -72,14 +73,14 @@ func NewJail() Jail {
 			NewCell(4, "Stage 4 Ban -> 30d", 30*24*time.Hour),
 			NewCell(5, "Stage 5 Ban -> 180d", 180*24*time.Hour),
 		},
-		AllCidrs: []string{},
+		AllCIDRs: []string{},
 	}
 }
 
 func (j *Jail) rangeInJail(cidr string) (bool, int, int) {
 	for cId, cell := range j.Cells {
 		for pId, prisoner := range cell.Prisoners {
-			if prisoner.Cidr == cidr {
+			if prisoner.CIDR == cidr {
 				return true, cId, pId
 			}
 		}
@@ -147,7 +148,7 @@ func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 
 	for cellIdx, cell := range j.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
-			if isSubRange(prisoner.Cidr, cidr) {
+			if isSubRange(prisoner.CIDR, cidr) {
 				matchedCells = append(matchedCells, cellIdx)
 				matchedPrisoners = append(matchedPrisoners, prisonerIdx)
 				found = true
@@ -160,7 +161,7 @@ func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 func (j *Jail) ParentRangeInJail(cidr string) (bool, int, int) {
 	for cellIdx, cell := range j.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
-			if isSubRange(cidr, prisoner.Cidr) {
+			if isSubRange(cidr, prisoner.CIDR) {
 				return true, cellIdx, prisonerIdx
 			}
 		}
@@ -170,15 +171,9 @@ func (j *Jail) ParentRangeInJail(cidr string) (bool, int, int) {
 
 func maxInList(list []int) int {
 	if len(list) == 0 {
-		return -1 // or some other default value
+		return -1
 	}
-	max := list[0]
-	for _, v := range list {
-		if v > max {
-			max = v
-		}
-	}
-	return max
+	return slices.Max(list)
 }
 
 func (j *Jail) Fill(cidr string) error {
@@ -216,18 +211,18 @@ func (j *Jail) Fill(cidr string) error {
 					idx = maxCellIdx + 1
 				}
 				ThrowPrisonerInCell(j, idx, Prisoner{
-					Cidr:      cidr,
+					CIDR:      cidr,
 					BanStart:  time.Now(),
 					BanActive: true,
 				})
 			} else {
 				ThrowPrisonerInCell(j, maxCellIdx, Prisoner{
-					Cidr:      cidr,
+					CIDR:      cidr,
 					BanStart:  banStart,
 					BanActive: true,
 				})
 			}
-			j.AllCidrs = append(j.AllCidrs, cidr)
+			j.AllCIDRs = append(j.AllCIDRs, cidr)
 
 		}
 
@@ -239,11 +234,11 @@ func (j *Jail) Fill(cidr string) error {
 	} else {
 		// If CIDR is not in jail, add it to the first cell
 		ThrowPrisonerInCell(j, 0, Prisoner{
-			Cidr:      cidr,
+			CIDR:      cidr,
 			BanStart:  time.Now(),
 			BanActive: true,
 		})
-		j.AllCidrs = append(j.AllCidrs, cidr)
+		j.AllCIDRs = append(j.AllCIDRs, cidr)
 	}
 
 	return nil
@@ -280,7 +275,7 @@ func (j *Jail) ListActiveBans() []string {
 	for _, cell := range j.Cells {
 		for _, prisoner := range cell.Prisoners {
 			if prisoner.BanActive {
-				cidrs = append(cidrs, prisoner.Cidr)
+				cidrs = append(cidrs, prisoner.CIDR)
 			}
 		}
 	}

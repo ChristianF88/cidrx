@@ -577,7 +577,7 @@ func (t *Trie) calculateOptimalWorkerCount(totalCount uint32) int {
 
 	// For medium datasets, use fewer workers to reduce coordination overhead
 	if totalCount < 50000 {
-		return maxInt(1, baseCPUs/2)
+		return max(1, baseCPUs/2)
 	}
 
 	// For large datasets, use more workers but cap to avoid excessive overhead
@@ -586,22 +586,7 @@ func (t *Trie) calculateOptimalWorkerCount(totalCount uint32) int {
 	}
 
 	// For very large datasets, can benefit from more workers (up to 2x CPUs)
-	return minInt(baseCPUs*2, 16) // Cap at 16 to prevent excessive context switching
-}
-
-// Helper functions for worker optimization
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	return min(baseCPUs*2, 16) // Cap at 16 to prevent excessive context switching
 }
 
 // subtreeWork represents a work item for the worker pool

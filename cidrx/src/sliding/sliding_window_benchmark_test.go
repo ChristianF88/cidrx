@@ -22,12 +22,12 @@ func BenchmarkSlidingWindowUpdate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		swt := NewSlidingWindowTrie(10*time.Second, 1000000)
-		timedIPs := make([]TimedIp, 0, batchSize)
+		timedIPs := make([]TimedIP, 0, batchSize)
 		b.StartTimer()
 
 		for u := 0; u < len(Ips); u++ {
-			timedIPs = append(timedIPs, TimedIp{
-				Ip:               Ips[u],
+			timedIPs = append(timedIPs, TimedIP{
+				IP:               Ips[u],
 				EndpointAllowed:  true,
 				UserAgentAllowed: false,
 				Time:             time.Now(),
@@ -35,7 +35,7 @@ func BenchmarkSlidingWindowUpdate(b *testing.B) {
 
 			if u%batchSize == 0 {
 				swt.Update(timedIPs)
-				timedIPs = make([]TimedIp, 0, batchSize)
+				timedIPs = make([]TimedIP, 0, batchSize)
 			}
 		}
 	}

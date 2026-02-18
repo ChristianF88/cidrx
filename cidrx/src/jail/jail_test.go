@@ -18,8 +18,8 @@ func TestFillJail_NewPrisoner(t *testing.T) {
 		t.Errorf("Expected 1 prisoner in the first cell, got %d", len(jail.Cells[0].Prisoners))
 	}
 
-	if jail.Cells[0].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected CIDR %s, got %s", cidr, jail.Cells[0].Prisoners[0].Cidr)
+	if jail.Cells[0].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected CIDR %s, got %s", cidr, jail.Cells[0].Prisoners[0].CIDR)
 	}
 
 	if !jail.Cells[0].Prisoners[0].BanActive {
@@ -49,8 +49,8 @@ func TestFillJail_MovePrisonerToNextCell(t *testing.T) {
 		t.Errorf("Expected 1 prisoner in the second cell, got %d", len(jail.Cells[1].Prisoners))
 	}
 
-	if jail.Cells[1].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected CIDR %s in the second cell, got %s", cidr, jail.Cells[1].Prisoners[0].Cidr)
+	if jail.Cells[1].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected CIDR %s in the second cell, got %s", cidr, jail.Cells[1].Prisoners[0].CIDR)
 	}
 }
 
@@ -72,8 +72,8 @@ func TestFillJail_RenewBanInLastCell(t *testing.T) {
 		t.Errorf("Expected 1 prisoner in the last cell, got %d", len(jail.Cells[lastCellIndex].Prisoners))
 	}
 
-	if jail.Cells[lastCellIndex].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected CIDR %s in the last cell, got %s", cidr, jail.Cells[lastCellIndex].Prisoners[0].Cidr)
+	if jail.Cells[lastCellIndex].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected CIDR %s in the last cell, got %s", cidr, jail.Cells[lastCellIndex].Prisoners[0].CIDR)
 	}
 
 	if !jail.Cells[lastCellIndex].Prisoners[0].BanActive {
@@ -213,13 +213,13 @@ func TestFill_NewPrisonerAdded(t *testing.T) {
 	if len(jail.Cells[0].Prisoners) != 1 {
 		t.Errorf("Expected 1 prisoner in first cell, got %d", len(jail.Cells[0].Prisoners))
 	}
-	if jail.Cells[0].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected prisoner CIDR %s, got %s", cidr, jail.Cells[0].Prisoners[0].Cidr)
+	if jail.Cells[0].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected prisoner CIDR %s, got %s", cidr, jail.Cells[0].Prisoners[0].CIDR)
 	}
 	if !jail.Cells[0].Prisoners[0].BanActive {
 		t.Errorf("Expected BanActive true, got false")
 	}
-	if len(jail.AllCidrs) != 1 || jail.AllCidrs[0] != cidr {
+	if len(jail.AllCIDRs) != 1 || jail.AllCIDRs[0] != cidr {
 		t.Errorf("Expected AllCidrs to contain %s", cidr)
 	}
 }
@@ -238,8 +238,8 @@ func TestFill_ExistingPrisonerBanExpired_MovesToNextCell(t *testing.T) {
 	if len(jail.Cells[1].Prisoners) != 1 {
 		t.Errorf("Expected 1 prisoner in second cell, got %d", len(jail.Cells[1].Prisoners))
 	}
-	if jail.Cells[1].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected CIDR %s in second cell, got %s", cidr, jail.Cells[1].Prisoners[0].Cidr)
+	if jail.Cells[1].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected CIDR %s in second cell, got %s", cidr, jail.Cells[1].Prisoners[0].CIDR)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestFill_InvalidCIDR_DoesNotPanic(t *testing.T) {
 	// Should not add to jail
 	for _, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
-			if prisoner.Cidr == "invalid-cidr" {
+			if prisoner.CIDR == "invalid-cidr" {
 				t.Errorf("Expected invalid CIDR not to be added, but found in jail")
 			}
 		}
@@ -302,13 +302,13 @@ func TestFill_AddsNewPrisonerToFirstCell(t *testing.T) {
 	if len(jail.Cells[0].Prisoners) != 1 {
 		t.Errorf("Expected 1 prisoner in first cell, got %d", len(jail.Cells[0].Prisoners))
 	}
-	if jail.Cells[0].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected prisoner CIDR %s, got %s", cidr, jail.Cells[0].Prisoners[0].Cidr)
+	if jail.Cells[0].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected prisoner CIDR %s, got %s", cidr, jail.Cells[0].Prisoners[0].CIDR)
 	}
 	if !jail.Cells[0].Prisoners[0].BanActive {
 		t.Errorf("Expected BanActive true, got false")
 	}
-	if len(jail.AllCidrs) != 1 || jail.AllCidrs[0] != cidr {
+	if len(jail.AllCIDRs) != 1 || jail.AllCIDRs[0] != cidr {
 		t.Errorf("Expected AllCidrs to contain %s", cidr)
 	}
 }
@@ -321,7 +321,7 @@ func TestFill_DoesNotAddInvalidCIDR(t *testing.T) {
 	}
 	for _, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
-			if prisoner.Cidr == "invalid-cidr" {
+			if prisoner.CIDR == "invalid-cidr" {
 				t.Errorf("Expected invalid CIDR not to be added, but found in jail")
 			}
 		}
@@ -342,8 +342,8 @@ func TestFill_MovesPrisonerToNextCellOnRepeatOffense(t *testing.T) {
 	if len(jail.Cells[1].Prisoners) != 1 {
 		t.Errorf("Expected 1 prisoner in second cell, got %d", len(jail.Cells[1].Prisoners))
 	}
-	if jail.Cells[1].Prisoners[0].Cidr != cidr {
-		t.Errorf("Expected CIDR %s in second cell, got %s", cidr, jail.Cells[1].Prisoners[0].Cidr)
+	if jail.Cells[1].Prisoners[0].CIDR != cidr {
+		t.Errorf("Expected CIDR %s in second cell, got %s", cidr, jail.Cells[1].Prisoners[0].CIDR)
 	}
 }
 
@@ -360,10 +360,10 @@ func TestFill_SubRangeHandling(t *testing.T) {
 	foundParent := false
 	foundSub := false
 	for _, prisoner := range jail.Cells[0].Prisoners {
-		if prisoner.Cidr == parent {
+		if prisoner.CIDR == parent {
 			foundParent = true
 		}
-		if prisoner.Cidr == sub {
+		if prisoner.CIDR == sub {
 			foundSub = true
 		}
 	}
@@ -383,7 +383,7 @@ func TestFill_DoesNotDuplicatePrisoner(t *testing.T) {
 	count := 0
 	for _, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
-			if prisoner.Cidr == cidr {
+			if prisoner.CIDR == cidr {
 				count++
 			}
 		}
@@ -396,7 +396,7 @@ func TestFill_DoesNotDuplicatePrisoner(t *testing.T) {
 func cidrExistsInJail(jail Jail, cidr string) bool {
 	for _, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
-			if prisoner.Cidr == cidr {
+			if prisoner.CIDR == cidr {
 				return true
 			}
 		}
@@ -407,7 +407,7 @@ func cidrExistsInJail(jail Jail, cidr string) bool {
 func findCellIndex(jail Jail, cidr string) int {
 	for idx, cell := range jail.Cells {
 		for _, prisoner := range cell.Prisoners {
-			if prisoner.Cidr == cidr {
+			if prisoner.CIDR == cidr {
 				return idx
 			}
 		}

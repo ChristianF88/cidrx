@@ -11,14 +11,14 @@ import (
 
 // --- Sliding Window Wrapper ---
 
-type TimedIp struct {
-	Ip               net.IP
+type TimedIP struct {
+	IP               net.IP
 	EndpointAllowed  bool
 	UserAgentAllowed bool
 	Time             time.Time
 }
 
-type IpStat struct {
+type IPStat struct {
 	Last              time.Time
 	DeltaT            []time.Duration
 	EndpointsAllowed  []bool
@@ -28,8 +28,8 @@ type IpStat struct {
 
 type SlidingWindow struct {
 	Trie       *trie.Trie
-	IpQueue    []TimedIp
-	IpStats    *haxmap.Map[uint32, IpStat] // ip represented as uint32 (IPv4)
+	IPQueue    []TimedIP
+	IPStats    *haxmap.Map[uint32, IPStat] // ip represented as uint32 (IPv4)
 	timeLimit  time.Duration
 	maxEntries int
 }
@@ -37,20 +37,20 @@ type SlidingWindow struct {
 func NewSlidingWindowTrie(window time.Duration, maxEntries int) *SlidingWindow {
 	return &SlidingWindow{
 		Trie:       trie.NewTrie(),
-		IpQueue:    make([]TimedIp, 0),
-		IpStats:    haxmap.New[uint32, IpStat](1 << 21), // 256M entries preallocated
+		IPQueue:    make([]TimedIP, 0),
+		IPStats:    haxmap.New[uint32, IPStat](1 << 21), // 256M entries preallocated
 		timeLimit:  window,
 		maxEntries: maxEntries,
 	}
 }
 
-func insertIntoHaxmap(m *haxmap.Map[uint32, IpStat], ip net.IP, timedIp TimedIp) {
+func insertIntoHaxmap(m *haxmap.Map[uint32, IPStat], ip net.IP, timedIP TimedIP) {
 	var skipDeltaT bool = false
 	ipUint32 := iputils.IPToUint32(ip)
 	stat, exists := m.Get(ipUint32)
 	if !exists {
-		stat = IpStat{
-			Last:              timedIp.Time,
+		stat = IPStat{
+			Last:              timedIP.Time,
 			DeltaT:            make([]time.Duration, 0),
 			EndpointsAllowed:  make([]bool, 0),
 			UserAgentsAllowed: make([]bool, 0),
@@ -60,16 +60,16 @@ func insertIntoHaxmap(m *haxmap.Map[uint32, IpStat], ip net.IP, timedIp TimedIp)
 	}
 
 	if !skipDeltaT {
-		stat.DeltaT = append(stat.DeltaT, timedIp.Time.Sub(stat.Last))
+		stat.DeltaT = append(stat.DeltaT, timedIP.Time.Sub(stat.Last))
 	}
-	stat.EndpointsAllowed = append(stat.EndpointsAllowed, timedIp.EndpointAllowed)
-	stat.UserAgentsAllowed = append(stat.UserAgentsAllowed, timedIp.UserAgentAllowed)
-	stat.Last = timedIp.Time
+	stat.EndpointsAllowed = append(stat.EndpointsAllowed, timedIP.EndpointAllowed)
+	stat.UserAgentsAllowed = append(stat.UserAgentsAllowed, timedIP.UserAgentAllowed)
+	stat.Last = timedIP.Time
 	stat.Count++
 	m.Set(ipUint32, stat)
 }
 
-func deleteFromHaxmap(m *haxmap.Map[uint32, IpStat], ip net.IP) {
+func deleteFromHaxmap(m *haxmap.Map[uint32, IPStat], ip net.IP) {
 	ipUint32 := iputils.IPToUint32(ip)
 	stat, exists := m.Get(ipUint32)
 	if !exists {
@@ -94,11 +94,11 @@ func deleteFromHaxmap(m *haxmap.Map[uint32, IpStat], ip net.IP) {
 	m.Set(ipUint32, stat)
 }
 
-func (s *SlidingWindow) InsertNew(timedIPs []TimedIp) {
-	s.IpQueue = append(s.IpQueue, timedIPs...)
+func (s *SlidingWindow) InsertNew(timedIPs []TimedIP) {
+	s.IPQueue = append(s.IPQueue, timedIPs...)
 	for _, timedIP := range timedIPs {
-		s.Trie.Insert(timedIP.Ip)
-		insertIntoHaxmap(s.IpStats, timedIP.Ip, timedIP)
+		s.Trie.Insert(timedIP.IP)
+		insertIntoHaxmap(s.IPStats, timedIP.IP, timedIP)
 	}
 }
 
@@ -106,29 +106,29 @@ func (s *SlidingWindow) DropOld() {
 	// enforce time limit
 	cutoff := time.Now().Add(-s.timeLimit)
 	idxTime := 0
-	for idxTime < len(s.IpQueue) && s.IpQueue[idxTime].Time.Before(cutoff) {
-		s.Trie.Delete(s.IpQueue[idxTime].Ip)
-		deleteFromHaxmap(s.IpStats, s.IpQueue[idxTime].Ip)
+	for idxTime < len(s.IPQueue) && s.IPQueue[idxTime].Time.Before(cutoff) {
+		s.Trie.Delete(s.IPQueue[idxTime].IP)
+		deleteFromHaxmap(s.IPStats, s.IPQueue[idxTime].IP)
 		idxTime++
 	}
 	// enforce max entries
-	remainingLen := len(s.IpQueue) - idxTime
+	remainingLen := len(s.IPQueue) - idxTime
 	if remainingLen > s.maxEntries {
 		toDelete := remainingLen - s.maxEntries
 		for idxLen := 0; idxLen < toDelete; idxLen++ {
-			s.Trie.Delete(s.IpQueue[idxTime+idxLen].Ip)
-			deleteFromHaxmap(s.IpStats, s.IpQueue[idxTime+idxLen].Ip)
+			s.Trie.Delete(s.IPQueue[idxTime+idxLen].IP)
+			deleteFromHaxmap(s.IPStats, s.IPQueue[idxTime+idxLen].IP)
 		}
 		idxTime += toDelete
 	}
 
 	if idxTime > 0 {
 		// Efficient memory-releasing slice copy
-		s.IpQueue = append([]TimedIp(nil), s.IpQueue[idxTime:]...)
+		s.IPQueue = append([]TimedIP(nil), s.IPQueue[idxTime:]...)
 	}
 }
 
-func (s *SlidingWindow) Update(timedIPs []TimedIp) {
+func (s *SlidingWindow) Update(timedIPs []TimedIP) {
 	s.InsertNew(timedIPs)
 	s.DropOld()
 }

@@ -974,14 +974,6 @@ func BenchmarkParallelParser_FileProcessing(b *testing.B) {
 	}
 }
 
-// Helper functions
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // Mock static parser for performance comparison
 func parseEventStaticMock(evt map[string]interface{}, out *ingestor.Request) error {
 	msg, ok := evt["message"].(string)

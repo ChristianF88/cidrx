@@ -79,7 +79,7 @@ func NewApp(logFile string, clusterArgSets []string, rangesCidr []string, plotPa
 
 	// Create a single trie config from legacy arguments
 	trieConfig := &config.TrieConfig{
-		CidrRanges: rangesCidr,
+		CIDRRanges: rangesCidr,
 	}
 
 	// Parse cluster arg sets if provided
@@ -482,7 +482,7 @@ func (a *App) animateProgress() {
 			// Count cluster sets and CIDR ranges from config
 			for _, trieConfig := range a.cfg.StaticTries {
 				clusterSets += len(trieConfig.ClusterArgSets)
-				cidrRanges += len(trieConfig.CidrRanges)
+				cidrRanges += len(trieConfig.CIDRRanges)
 			}
 		} else {
 			// Legacy mode
@@ -692,10 +692,10 @@ func (a *App) displayLegacyResultsUncached() {
 
 			for _, cidr := range cluster.MergedRanges {
 				clusteringText.WriteString(fmt.Sprintf("  • %s: [red]%s[white] requests (%.2f%%)\n",
-					cidr.CIDR, formatNumber(int(cidr.Requests)), cidr.Percentage))
+					cidr.CIDR, output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
 			}
 			clusteringText.WriteString(fmt.Sprintf("[yellow]Total for Set %d: %s requests (%.2f%%)[white]\n",
-				i+1, formatNumber(int(totalRequests)), totalPercentage))
+				i+1, output.FormatNumber(int(totalRequests)), totalPercentage))
 		} else {
 			clusteringText.WriteString("[dim]No significant ranges detected[white]\n")
 		}
@@ -712,7 +712,7 @@ func (a *App) displayLegacyResultsUncached() {
 		for _, cidr := range a.jsonResult.CIDRAnalysis.Data {
 			cidrText.WriteString(fmt.Sprintf("[cyan]%s[white]\n", cidr.CIDR))
 			cidrText.WriteString(fmt.Sprintf("  Requests: [yellow]%s[white] (%.2f%%)\n\n",
-				formatNumber(int(cidr.Requests)), cidr.Percentage))
+				output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
 		}
 	} else {
 		cidrText.WriteString("[dim]No specific ranges analyzed[white]")
@@ -773,10 +773,10 @@ func (a *App) buildClusteringText() string {
 
 			for _, cidr := range cluster.MergedRanges {
 				clusteringText.WriteString(fmt.Sprintf("  • %s: [red]%s[white] requests (%.2f%%)\n",
-					cidr.CIDR, formatNumber(int(cidr.Requests)), cidr.Percentage))
+					cidr.CIDR, output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
 			}
 			clusteringText.WriteString(fmt.Sprintf("[yellow]Total for Set %d: %s requests (%.2f%%)[white]\n",
-				i+1, formatNumber(int(totalRequests)), totalPercentage))
+				i+1, output.FormatNumber(int(totalRequests)), totalPercentage))
 		} else {
 			clusteringText.WriteString("[dim]No significant ranges detected[white]\n")
 		}
@@ -795,7 +795,7 @@ func (a *App) buildCidrAnalysisText() string {
 		for _, cidr := range a.jsonResult.CIDRAnalysis.Data {
 			cidrText.WriteString(fmt.Sprintf("[cyan]%s[white]\n", cidr.CIDR))
 			cidrText.WriteString(fmt.Sprintf("  Requests: [yellow]%s[white] (%.2f%%)\n\n",
-				formatNumber(int(cidr.Requests)), cidr.Percentage))
+				output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
 		}
 	} else {
 		cidrText.WriteString("[dim]No specific ranges analyzed[white]")
@@ -861,9 +861,9 @@ func (a *App) buildSummaryText() string {
 	}
 
 	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec  ",
-		formatNumber(int(parseRate))))
+		output.FormatNumber(int(parseRate))))
 	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s  ",
-		formatNumber(totalIPsRead)))
+		output.FormatNumber(totalIPsRead)))
 	summaryText.WriteString(fmt.Sprintf("[dim]Parsing Time:[white] %dms\n\n",
 		parsingTime))
 
@@ -891,7 +891,7 @@ func (a *App) buildSummaryText() string {
 
 		// Requests after filtering
 		summaryText.WriteString(fmt.Sprintf("[dim]Requests After Filtering:[white] %s\n",
-			formatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
+			output.FormatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
 
 		// Analysis time (sum of all clustering runs)
 		totalAnalysisTime := a.calculateTotalAnalysisTime(trieData.Data)
@@ -916,7 +916,7 @@ func (a *App) buildSummaryText() string {
 		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
 		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", a.jsonResult.General.LogFile))
 		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
-			formatNumber(a.jsonResult.General.UniqueIPs)))
+			output.FormatNumber(a.jsonResult.General.UniqueIPs)))
 		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", a.jsonResult.Metadata.DurationMS))
 	}
 
@@ -953,7 +953,7 @@ func (a *App) getActiveFilters(params output.TrieParameters) []string {
 		}
 	}
 
-	// Note: CidrRanges are not filters - they are analysis targets, so we don't include them
+	// Note: CIDRRanges are not filters - they are analysis targets, so we don't include them
 
 	return filters
 }
@@ -1103,23 +1103,6 @@ func (a *App) convertTrieToLegacy(trieIndex int) *output.JSONOutput {
 	legacyResult.Errors = a.multiTrieResult.Errors
 
 	return legacyResult
-}
-
-// formatNumber adds thousand separators to numbers
-func formatNumber(n int) string {
-	str := fmt.Sprintf("%d", n)
-	if len(str) <= 3 {
-		return str
-	}
-
-	var result strings.Builder
-	for i, digit := range str {
-		if i > 0 && (len(str)-i)%3 == 0 {
-			result.WriteString(",")
-		}
-		result.WriteRune(digit)
-	}
-	return result.String()
 }
 
 // displayResultsFast uses pre-rendered texts from FastTrieCache for instant display

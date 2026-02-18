@@ -2,6 +2,8 @@ package output
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -86,7 +88,7 @@ type TrieParameters struct {
 	UserAgentRegex *string    `json:"useragent_regex,omitempty"`
 	EndpointRegex  *string    `json:"endpoint_regex,omitempty"`
 	TimeRange      *TimeRange `json:"time_range,omitempty"`
-	CidrRanges     []string   `json:"cidr_ranges,omitempty"`
+	CIDRRanges     []string   `json:"cidr_ranges,omitempty"`
 	UseForJail     []bool     `json:"use_for_jail,omitempty"`
 }
 
@@ -217,4 +219,21 @@ type LiveCIDR struct {
 // UpdateDuration updates the duration in metadata
 func (j *JSONOutput) UpdateDuration(startTime time.Time) {
 	j.Metadata.DurationMS = time.Since(startTime).Milliseconds()
+}
+
+// FormatNumber adds thousand separators to numbers
+func FormatNumber(n int) string {
+	str := fmt.Sprintf("%d", n)
+	if len(str) <= 3 {
+		return str
+	}
+
+	var result strings.Builder
+	for i, digit := range str {
+		if i > 0 && (len(str)-i)%3 == 0 {
+			result.WriteString(",")
+		}
+		result.WriteRune(digit)
+	}
+	return result.String()
 }

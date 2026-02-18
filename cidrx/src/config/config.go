@@ -41,7 +41,7 @@ type TrieConfig struct {
 	EndpointRegex  string     `toml:"endpointRegex"`
 	StartTime      *time.Time `toml:"startTime"`
 	EndTime        *time.Time `toml:"endTime"`
-	CidrRanges     []string   `toml:"cidrRanges"`
+	CIDRRanges     []string   `toml:"cidrRanges"`
 	ClusterArgSets []ClusterArgSet
 	UseForJail     []bool `toml:"useForJail"`
 
@@ -243,7 +243,7 @@ func parseTrieConfig(m map[string]any) *TrieConfig {
 	if v, ok := m["cidrRanges"].([]any); ok {
 		for _, item := range v {
 			if str, ok := item.(string); ok {
-				config.CidrRanges = append(config.CidrRanges, str)
+				config.CIDRRanges = append(config.CIDRRanges, str)
 			}
 		}
 	}

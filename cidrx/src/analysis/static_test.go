@@ -27,7 +27,7 @@ func TestStaticFromConfigBasic(t *testing.T) {
 				ClusterArgSets: []config.ClusterArgSet{
 					{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
 				},
-				CidrRanges: []string{"192.168.0.0/16"},
+				CIDRRanges: []string{"192.168.0.0/16"},
 			},
 		},
 	}
@@ -52,12 +52,12 @@ func TestStaticFromConfigBasic(t *testing.T) {
 
 	// Verify parameters are set correctly
 	trieResult := result.Tries[0]
-	if len(trieResult.Parameters.CidrRanges) != 1 {
-		t.Errorf("Expected 1 CIDR range, got %d", len(trieResult.Parameters.CidrRanges))
+	if len(trieResult.Parameters.CIDRRanges) != 1 {
+		t.Errorf("Expected 1 CIDR range, got %d", len(trieResult.Parameters.CIDRRanges))
 	}
 
-	if trieResult.Parameters.CidrRanges[0] != "192.168.0.0/16" {
-		t.Errorf("Expected CIDR range '192.168.0.0/16', got '%s'", trieResult.Parameters.CidrRanges[0])
+	if trieResult.Parameters.CIDRRanges[0] != "192.168.0.0/16" {
+		t.Errorf("Expected CIDR range '192.168.0.0/16', got '%s'", trieResult.Parameters.CIDRRanges[0])
 	}
 
 	// Verify clustering was performed

@@ -7,19 +7,19 @@ import (
 	"testing"
 )
 
-func TestJailToJsonAndBack(t *testing.T) {
+func TestJailToJSONAndBack(t *testing.T) {
 	jail := NewJail()
 	cidr := "192.168.1.0/24"
 
 	// Add a prisoner to the first cell
 	jail.Fill(cidr)
-	jailJSON, err := JailToJson(jail)
+	jailJSON, err := JailToJSON(jail)
 	if err != nil {
 		t.Errorf("Error converting jail to JSON: %v", err)
 	}
 	fmt.Println("Jail JSON:", jailJSON)
 	var jailFromJSON Jail
-	jailFromJSON, err = JsonToJail(jailJSON)
+	jailFromJSON, err = JSONToJail(jailJSON)
 	if err != nil {
 		t.Errorf("Error converting JSON to jail: %v", err)
 	}
@@ -142,7 +142,7 @@ func jailsAreEqual(j1, j2 Jail) bool {
 		}
 		for j := range j1.Cells[i].Prisoners {
 			p1, p2 := j1.Cells[i].Prisoners[j], j2.Cells[i].Prisoners[j]
-			if p1.Cidr != p2.Cidr || p1.BanActive != p2.BanActive || !p1.BanStart.Equal(p2.BanStart) {
+			if p1.CIDR != p2.CIDR || p1.BanActive != p2.BanActive || !p1.BanStart.Equal(p2.BanStart) {
 				return false
 			}
 		}

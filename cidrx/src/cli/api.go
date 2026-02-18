@@ -170,7 +170,7 @@ func createConfigFromCLI(logFile, logFormat string, startTime, endTime time.Time
 	trieConfig := &config.TrieConfig{
 		UserAgentRegex: useragentRegex,
 		EndpointRegex:  endpointRegex,
-		CidrRanges:     rangesCidr,
+		CIDRRanges:     rangesCidr,
 	}
 
 	// Set time range if provided
@@ -399,7 +399,7 @@ func executeLiveAnalysis(cfg *config.Config) {
 		// Process each sliding window
 		for _, winInst := range windows {
 			// Filter batch based on this window's regex filters
-			timedIps := make([]sliding.TimedIp, 0, len(batch))
+			timedIps := make([]sliding.TimedIP, 0, len(batch))
 			for _, msg := range batch {
 				if msg.Timestamp.IsZero() || msg.IPUint32 == 0 {
 					continue
@@ -410,8 +410,8 @@ func executeLiveAnalysis(cfg *config.Config) {
 					continue
 				}
 
-				timedIps = append(timedIps, sliding.TimedIp{
-					Ip:               msg.GetIPNet(),
+				timedIps = append(timedIps, sliding.TimedIP{
+					IP:               msg.GetIPNet(),
 					Time:             msg.Timestamp,
 					EndpointAllowed:  true,
 					UserAgentAllowed: true,
@@ -420,7 +420,7 @@ func executeLiveAnalysis(cfg *config.Config) {
 
 			// Update this specific window
 			winInst.window.Update(timedIps)
-			totalWindowSize += len(winInst.window.IpQueue)
+			totalWindowSize += len(winInst.window.IPQueue)
 
 			// Run clustering for each ClusterArgSet on this window
 			for i, argSet := range winInst.config.ClusterArgSets {
@@ -555,9 +555,9 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 	// Parsing Performance
 	fmt.Printf("⚡ PARSING PERFORMANCE\n")
 	fmt.Printf("────────────────────────────────────────────────────────────────────────────────\n")
-	fmt.Printf("Total Requests:  %s\n", formatNumber(jsonOutput.General.TotalRequests))
+	fmt.Printf("Total Requests:  %s\n", output.FormatNumber(jsonOutput.General.TotalRequests))
 	fmt.Printf("Parse Time:      %d ms\n", jsonOutput.General.Parsing.DurationMS)
-	fmt.Printf("Parse Rate:      %s requests/sec\n", formatNumber(int(jsonOutput.General.Parsing.RatePerSecond)))
+	fmt.Printf("Parse Rate:      %s requests/sec\n", output.FormatNumber(int(jsonOutput.General.Parsing.RatePerSecond)))
 	fmt.Printf("Log Format:      %s\n", jsonOutput.General.Parsing.Format)
 	fmt.Printf("\n")
 
@@ -567,8 +567,8 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 		fmt.Printf("────────────────────────────────────────────────────────────────────────────────\n")
 
 		// Trie Statistics
-		fmt.Printf("Requests After Filtering: %s\n", formatNumber(trieResult.Stats.TotalRequestsAfterFiltering))
-		fmt.Printf("Unique IPs:              %s\n", formatNumber(trieResult.Stats.UniqueIPs))
+		fmt.Printf("Requests After Filtering: %s\n", output.FormatNumber(trieResult.Stats.TotalRequestsAfterFiltering))
+		fmt.Printf("Unique IPs:              %s\n", output.FormatNumber(trieResult.Stats.UniqueIPs))
 		fmt.Printf("Trie Build Time:         %d ms\n", trieResult.Stats.InsertTimeMS)
 
 		// Active Filters
@@ -587,7 +587,7 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 			fmt.Printf("...............................................................................  \n")
 			for _, cidr := range trieResult.Stats.CIDRAnalysis {
 				fmt.Printf("  %-20s  %10s requests  (%6.2f%%)\n",
-					cidr.CIDR, formatNumber(int(cidr.Requests)), cidr.Percentage)
+					cidr.CIDR, output.FormatNumber(int(cidr.Requests)), cidr.Percentage)
 			}
 			fmt.Printf("\n")
 		}
@@ -608,12 +608,12 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 					var totalThreats uint32
 					for _, threat := range cluster.MergedRanges {
 						fmt.Printf("    %-20s  %10s requests  (%6.2f%%)\n",
-							threat.CIDR, formatNumber(int(threat.Requests)), threat.Percentage)
+							threat.CIDR, output.FormatNumber(int(threat.Requests)), threat.Percentage)
 						totalThreats += threat.Requests
 					}
 					totalPercentage := float64(totalThreats) / float64(trieResult.Stats.UniqueIPs) * 100
 					fmt.Printf("    %-20s  %10s requests  (%6.2f%%) [TOTAL]\n",
-						"───────────────────", formatNumber(int(totalThreats)), totalPercentage)
+						"───────────────────", output.FormatNumber(int(totalThreats)), totalPercentage)
 				} else {
 					fmt.Printf("  No significant threat ranges detected\n")
 				}
@@ -688,21 +688,4 @@ func getActiveFiltersPlain(params output.TrieParameters) []string {
 	}
 
 	return filters
-}
-
-// formatNumber adds thousand separators to numbers
-func formatNumber(n int) string {
-	str := fmt.Sprintf("%d", n)
-	if len(str) <= 3 {
-		return str
-	}
-
-	var result strings.Builder
-	for i, digit := range str {
-		if i > 0 && (len(str)-i)%3 == 0 {
-			result.WriteString(",")
-		}
-		result.WriteRune(digit)
-	}
-	return result.String()
 }

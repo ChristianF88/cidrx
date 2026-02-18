@@ -12,17 +12,17 @@ import (
 )
 
 // Convert Jail to json with the json package
-func JailToJson(jail Jail) (string, error) {
-	jailJson, err := json.Marshal(jail)
+func JailToJSON(jail Jail) (string, error) {
+	jailJSON, err := json.Marshal(jail)
 	if err != nil {
 		return "", err
 	}
-	return string(jailJson), nil
+	return string(jailJSON), nil
 }
 
-func JsonToJail(jailJson string) (Jail, error) {
+func JSONToJail(jailJSON string) (Jail, error) {
 	var jail Jail
-	err := json.Unmarshal([]byte(jailJson), &jail)
+	err := json.Unmarshal([]byte(jailJSON), &jail)
 	if err != nil {
 		return Jail{}, err
 	}
@@ -53,11 +53,11 @@ func ReadFromFile(filename string) (string, error) {
 
 func JailToFile(jail Jail, filename string) error {
 
-	jailJson, err := JailToJson(jail)
+	jailJSON, err := JailToJSON(jail)
 	if err != nil {
 		return err
 	}
-	err = WriteToFile(filename, jailJson)
+	err = WriteToFile(filename, jailJSON)
 	if err != nil {
 		return err
 	}
@@ -74,11 +74,11 @@ func FileToJail(filename string) (Jail, error) {
 		return NewJail(), nil
 	}
 
-	jailJson, err := ReadFromFile(filename)
+	jailJSON, err := ReadFromFile(filename)
 	if err != nil {
 		return Jail{}, err
 	}
-	jail, err := JsonToJail(jailJson)
+	jail, err := JSONToJail(jailJSON)
 	if err != nil {
 		return Jail{}, err
 	}
@@ -105,7 +105,7 @@ func ReadBanFile(filename string) []string {
 		line = strings.TrimSpace(line)
 
 		if !iputils.IsValidCidrOrIP(line) {
-			fmt.Println(fmt.Errorf("invalid CIDR or IP: %s", line))
+			fmt.Fprintf(os.Stderr, "invalid CIDR or IP: %s\n", line)
 			continue
 		}
 

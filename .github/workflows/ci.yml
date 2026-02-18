@@ -5,6 +5,7 @@ on:
     branches: [ main, master, refactoring/* ]
   pull_request:
     branches: [ main, master ]
+  workflow_call:  # Allow reuse from release.yml
 
 # Cancel redundant runs on the same ref
 concurrency:

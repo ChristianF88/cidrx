@@ -1,26 +1,13 @@
 # cidrx
 
-High-performance botnet detection tool that analyzes HTTP logs and automatically identifies attack patterns by clustering IP addresses into CIDR ranges.
+Fast IP clustering from HTTP access logs. cidrx parses Nginx, Apache, or custom-format
+access logs, builds a binary trie of every observed IP address, and clusters them into
+CIDR ranges based on configurable density thresholds — processing 1M+ requests/sec on
+commodity hardware.
 
-**[Full Documentation →](https://christianf88.github.io/cidrx/)**
-
-## About
-
-cidrx helps you identify and block botnets attacking your web services by:
-
-1. **Analyzing HTTP logs** (Nginx, Apache, custom formats)
-2. **Clustering malicious IPs** into CIDR ranges automatically
-3. **Generating block lists** for firewalls, nginx, iptables
-
-**Two modes:**
-- **Static**: Analyze historical logs (post-incident, audits)
-- **Live**: Real-time monitoring with automatic banning
-
-**Performance:** 1M+ requests/sec on notebook hardware
+**[Documentation](https://christianf88.github.io/cidrx/)**
 
 ## Quick Start
-
-### Installation
 
 ```bash
 git clone https://github.com/ChristianF88/cidrx.git
@@ -28,9 +15,7 @@ cd cidrx/cidrx/src
 go build -o cidrx .
 ```
 
-### Basic Example
-
-Analyze a log file and detect potential botnets:
+Analyze a log file and cluster high-volume IP ranges:
 
 ```bash
 ./cidrx static \
@@ -42,7 +27,6 @@ Analyze a log file and detect potential botnets:
   --plain
 ```
 
-**Output:**
 ```
 ═══════════════════════════════════════════════════════════════════════════════
                                cidrx Analysis Results
@@ -62,33 +46,73 @@ Set 1: min_size=1000, depth=24-32, threshold=0.10
   ─────────────────    4,391 requests  (  0.41%) [TOTAL]
 ```
 
-### What This Does
+Each clustering parameter set specifies a minimum request count, a CIDR depth range
+to search, and a density threshold. In the example above: at least 1000 requests,
+search /24 through /32, flag any subtree where 10%+ of the address space is active.
+Multiple `--clusterArgSets` can run concurrently for multi-tier analysis (e.g. broad /12-/16
+sweeps alongside narrow /24-/32 scans in a single pass).
 
-1. **Parsing**: Reads log file at 1M+ requests/sec
-2. **Filtering**: Optionally filter by URL patterns, User-Agent, time windows
-3. **Clustering**: Detects IP clusters with configurable parameters:
-   - `1000` = minimum requests required in cluster
-   - `24,32` = CIDR range size (min /24, max /32)
-   - `0.1` = 10% clustering threshold
+## How It Works
 
-## Learn More
+cidrx processes logs through a four-stage pipeline:
 
-**Documentation:** https://christianf88.github.io/cidrx/
+1. **Parse** — Reads log entries at 1M+ req/sec using a configurable format string
+   (`%h`, `%t`, `%r`, `%s`, `%u`, etc.) that maps to Nginx, Apache, or custom layouts.
+2. **Filter** — Optionally narrows results by time window, URL regex, User-Agent regex,
+   status code, or whitelist/blacklist files.
+3. **Trie** — Inserts every qualifying IP into a binary trie. Multiple independent tries
+   can run in parallel, each with its own filter set.
+4. **Cluster** — Walks the trie at configurable depths and flags subtrees exceeding the
+   density threshold, then collapses them into CIDR ranges with request counts.
 
-- [Installation Guide](https://christianf88.github.io/cidrx/docs/getting-started/installation/) - Detailed setup
-- [Static Analysis Guide](https://christianf88.github.io/cidrx/docs/guides/static-analysis/) - Historical analysis
-- [Live Protection Guide](https://christianf88.github.io/cidrx/docs/guides/live-protection/) - Real-time protection
-- [Reference](https://christianf88.github.io/cidrx/docs/reference/) - CLI flags, config file, clustering, filtering
-- [Docker Testing](https://christianf88.github.io/cidrx/docs/guides/docker-testing/) - Test environment
+Output formats: plain text, JSON, compact JSON, or an interactive TUI.
+
+## Modes
+
+**Static** — Analyze log files after the fact. Useful for traffic auditing, forensic
+analysis, or generating firewall rules from historical data.
+
+**Live** — Tail a log file in real time. cidrx re-analyzes on a configurable interval
+and can write ban files (CIDR lists compatible with iptables, nginx deny, etc.)
+automatically as new clusters emerge.
+
+## Use Cases
+
+- **Traffic auditing** — Which subnets send the most requests? How is traffic distributed
+  across IP ranges?
+- **Firewall rule generation** — Produce CIDR-based block or allow lists from observed
+  traffic patterns.
+- **Coordinated activity analysis** — Identify IP ranges with unusually concentrated
+  request volumes.
+- **Post-incident forensics** — Replay access logs to understand the origin and structure
+  of high-volume events.
+- **Real-time monitoring** — Tail logs and automatically generate ban files when clusters
+  cross thresholds.
+- **Capacity planning** — Understand which networks drive load and how traffic distributes
+  across prefixes.
 
 ## Features
 
-- **Ultra-Fast**: 1M+ requests/sec parsing
-- **Smart Detection**: Multiple clustering configurations
-- **Real-Time**: Live mode with automatic banning
-- **Flexible**: Regex filtering, whitelist/blacklist
-- **Multiple Outputs**: JSON, plain text, interactive TUI
+- Parses 1M+ requests/sec with zero-copy log extraction
+- Multiple concurrent clustering parameter sets in a single analysis pass
+- Regex filtering on URL path, User-Agent, and query string
+- Time-window filtering with flexible date/time parsing
+- IP whitelist and blacklist support
+- Named trie instances with independent filter chains
+- Predefined CIDR ranges for targeted subnet analysis
+- TOML config file support (all CLI flags have config equivalents)
+- JSON, compact JSON, plain text, and interactive TUI output
+
+## Documentation
+
+Full docs, guides, and reference: **https://christianf88.github.io/cidrx/**
+
+- [Installation](https://christianf88.github.io/cidrx/docs/getting-started/installation/)
+- [Static Analysis Guide](https://christianf88.github.io/cidrx/docs/guides/static-analysis/)
+- [Live Monitoring Guide](https://christianf88.github.io/cidrx/docs/guides/live-protection/)
+- [CLI & Config Reference](https://christianf88.github.io/cidrx/docs/reference/)
+- [Docker Testing](https://christianf88.github.io/cidrx/docs/guides/docker-testing/)
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details
+MIT — see [LICENSE](LICENSE).

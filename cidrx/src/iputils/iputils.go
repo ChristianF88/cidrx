@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
-	"time"
 )
 
 // IPToUint32 converts a net.IP to uint32 representation
@@ -63,21 +62,6 @@ func RandomIPsFromRange(cidr string, count int) ([]net.IP, error) {
 	}
 
 	return ipList, nil
-}
-
-// MeasureRandomIPsFromRange measures performance of random IP generation
-func MeasureRandomIPsFromRange(cidr string, counts []int) {
-	for _, count := range counts {
-		start := time.Now()
-		_, err := RandomIPsFromRange(cidr, count)
-		duration := time.Since(start)
-
-		if err != nil {
-			fmt.Printf("Error generating %d IPs: %v\n", count, err)
-		} else {
-			fmt.Printf("Generated %d IPs in %v\n", count, duration)
-		}
-	}
 }
 
 // randUint32Range generates a random uint32 in the range [min, max)

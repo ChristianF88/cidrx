@@ -76,14 +76,6 @@ useForJail = [true, false]
 		t.Errorf("Expected LogFile to be '/var/log/cidrx.log', got '%s'", config.Global.LogFile)
 	}
 
-	if config.Global.LogLevel != "info" {
-		t.Errorf("Expected LogLevel to be 'info', got '%s'", config.Global.LogLevel)
-	}
-
-	if config.Global.LogFileSizeMax != "100MB" {
-		t.Errorf("Expected LogFileSizeMax to be '100MB', got '%s'", config.Global.LogFileSizeMax)
-	}
-
 	if config.Global.JailFile != "/etc/cidrx/jail.json" {
 		t.Errorf("Expected JailFile to be '/etc/cidrx/jail.json', got '%s'", config.Global.JailFile)
 	}

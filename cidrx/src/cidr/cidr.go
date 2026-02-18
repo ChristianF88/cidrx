@@ -412,12 +412,6 @@ func LargestCIDRSize(start, maxSize uint32) uint8 {
 	return maxSizeAlignment
 }
 
-// Uint32ToCIDR converts a uint32 IP and prefix length to CIDR notation
-func Uint32ToCIDR(ip uint32, prefixLen int) string {
-	return fmt.Sprintf("%d.%d.%d.%d/%d",
-		byte(ip>>24), byte(ip>>16), byte(ip>>8), byte(ip), prefixLen)
-}
-
 // SubtractMultiple subtracts multiple whitelist CIDRs from a single blacklist CIDR
 // Optimized with pre-allocated slices and faster intersection detection
 func SubtractMultiple(blacklistCidr string, whitelistCidrs []string) ([]string, error) {

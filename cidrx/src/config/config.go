@@ -20,8 +20,6 @@ var BanFile string = filepath.Join(HomeDir, "banFile.txt")
 
 type GlobalConfig struct {
 	LogFile            string `toml:"logFile"`
-	LogLevel           string `toml:"logLevel"`
-	LogFileSizeMax     string `toml:"logFileSizeMax"`
 	JailFile           string `toml:"jailFile"`
 	BanFile            string `toml:"banFile"`
 	Whitelist          string `toml:"whitelist"`
@@ -162,12 +160,6 @@ func parseGlobalConfig(m map[string]any) *GlobalConfig {
 	config := &GlobalConfig{}
 	if v, ok := m["logFile"].(string); ok {
 		config.LogFile = v
-	}
-	if v, ok := m["logLevel"].(string); ok {
-		config.LogLevel = v
-	}
-	if v, ok := m["logFileSizeMax"].(string); ok {
-		config.LogFileSizeMax = v
 	}
 	if v, ok := m["jailFile"].(string); ok {
 		config.JailFile = v

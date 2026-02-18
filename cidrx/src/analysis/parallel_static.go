@@ -12,10 +12,24 @@ import (
 	"github.com/ChristianF88/cidrx/config"
 	"github.com/ChristianF88/cidrx/ingestor"
 	"github.com/ChristianF88/cidrx/iputils"
+	"github.com/ChristianF88/cidrx/jail"
 	"github.com/ChristianF88/cidrx/logparser"
 	"github.com/ChristianF88/cidrx/output"
+	"github.com/ChristianF88/cidrx/pools"
 	"github.com/ChristianF88/cidrx/trie"
 )
+
+// StaticFromConfig runs static analysis and returns the result.
+// This delegates to ParallelStaticFromConfig.
+func StaticFromConfig(cfg *config.Config) (*output.JSONOutput, error) {
+	return ParallelStaticFromConfig(cfg)
+}
+
+// StaticFromConfigWithRequests runs static analysis and returns both the result and parsed requests.
+// This delegates to ParallelStaticFromConfigWithRequests.
+func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
+	return ParallelStaticFromConfigWithRequests(cfg)
+}
 
 // ParallelStaticFromConfig runs static analysis with parallel trie building
 func ParallelStaticFromConfig(cfg *config.Config) (*output.JSONOutput, error) {
@@ -667,4 +681,101 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 
 		trieResult.Data = append(trieResult.Data, clusterResult)
 	}
+}
+
+// ProcessJailWithWhitelist processes jail updates with whitelist/blacklist filtering
+func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput) error {
+	if cfg.Global == nil {
+		return fmt.Errorf("global configuration is required for jail processing")
+	}
+
+	// Load whitelist and blacklist
+	whitelistCIDRs, err := cfg.LoadWhitelistCIDRs()
+	if err != nil {
+		jsonOutput.AddError("whitelist_load", fmt.Sprintf("failed to load whitelist: %v", err), 1)
+		return err
+	}
+	blacklistCIDRs, err := cfg.LoadBlacklistCIDRs()
+	if err != nil {
+		jsonOutput.AddError("blacklist_load", fmt.Sprintf("failed to load blacklist: %v", err), 1)
+		return err
+	}
+
+	// Collect all CIDRs from all tries that are marked for jail
+	allJailCIDRs := pools.Pools.GetStringSlice()
+	defer pools.Pools.ReturnStringSlice(allJailCIDRs)
+	for _, trieResult := range jsonOutput.Tries {
+		for i, clusterResult := range trieResult.Data {
+			if len(trieResult.Parameters.UseForJail) > i && trieResult.Parameters.UseForJail[i] {
+				for _, mergedRange := range clusterResult.MergedRanges {
+					allJailCIDRs = append(allJailCIDRs, mergedRange.CIDR)
+				}
+			}
+		}
+	}
+
+	// Apply whitelist filtering
+	filteredJailCIDRs := cidr.RemoveWhitelisted(allJailCIDRs, whitelistCIDRs)
+
+	// Also remove IPs that were whitelisted by User-Agent
+	if len(jsonOutput.UserAgentWhitelistIPs) > 0 {
+		userAgentWhitelistCIDRs := pools.Pools.GetStringSlice()
+		defer pools.Pools.ReturnStringSlice(userAgentWhitelistCIDRs)
+		for _, ip := range jsonOutput.UserAgentWhitelistIPs {
+			userAgentWhitelistCIDRs = append(userAgentWhitelistCIDRs, ip+"/32")
+		}
+		filteredJailCIDRs = cidr.RemoveWhitelisted(filteredJailCIDRs, userAgentWhitelistCIDRs)
+	}
+
+	// Log whitelist filtering results
+	if len(whitelistCIDRs) > 0 {
+		removedCount := len(allJailCIDRs) - len(filteredJailCIDRs)
+		jsonOutput.AddWarning("whitelist_applied", fmt.Sprintf("Whitelist filtering prevented %d CIDRs from being added to jail", removedCount), 0)
+	}
+
+	// Load existing jail
+	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
+	if err != nil {
+		jsonOutput.AddError("jail_load", fmt.Sprintf("failed to load jail: %v", err), 1)
+		return err
+	}
+
+	// Add User-Agent blacklisted IPs to jail
+	userAgentBlacklistCIDRs := pools.Pools.GetStringSlice()
+	defer pools.Pools.ReturnStringSlice(userAgentBlacklistCIDRs)
+	if len(jsonOutput.UserAgentBlacklistIPs) > 0 {
+		for _, ip := range jsonOutput.UserAgentBlacklistIPs {
+			userAgentBlacklistCIDRs = append(userAgentBlacklistCIDRs, ip+"/32")
+		}
+		filteredJailCIDRs = append(filteredJailCIDRs, userAgentBlacklistCIDRs...)
+	}
+
+	// Update jail with filtered CIDRs
+	if len(filteredJailCIDRs) > 0 {
+		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
+			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
+		}
+
+		err = jail.JailToFile(jailInstance, cfg.GetJailFile())
+		if err != nil {
+			jsonOutput.AddError("jail_save", fmt.Sprintf("failed to save jail: %v", err), 1)
+			return err
+		}
+	}
+
+	// Always generate ban file from jail
+	activeBans := jailInstance.ListActiveBans()
+	filteredActiveBans := cidr.RemoveWhitelisted(activeBans, whitelistCIDRs)
+
+	err = jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), filteredActiveBans, blacklistCIDRs)
+	if err != nil {
+		jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
+		return err
+	}
+
+	if len(blacklistCIDRs) > 0 {
+		jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(blacklistCIDRs)), 0)
+	}
+
+	return nil
 }

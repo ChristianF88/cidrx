@@ -86,7 +86,6 @@ func BenchmarkUserAgentMatcher_Creation(b *testing.B) {
 
 }
 
-
 // BenchmarkUserAgentMatcher_Lookup compares lookup performance
 func BenchmarkUserAgentMatcher_Lookup(b *testing.B) {
 	// Create test data
@@ -394,10 +393,10 @@ func generateNestedCIDRs(count int) []*net.IPNet {
 // BenchmarkNumericCIDR_String benchmarks the NumericCIDR.String() method
 func BenchmarkNumericCIDR_String(b *testing.B) {
 	testCases := []NumericCIDR{
-		{IP: 0x0A000000, PrefixLen: 8},   // 10.0.0.0/8
-		{IP: 0xC0A80100, PrefixLen: 24},  // 192.168.1.0/24
-		{IP: 0xFFFFFFFF, PrefixLen: 32},  // 255.255.255.255/32
-		{IP: 0x01020304, PrefixLen: 16},  // 1.2.3.4/16
+		{IP: 0x0A000000, PrefixLen: 8},  // 10.0.0.0/8
+		{IP: 0xC0A80100, PrefixLen: 24}, // 192.168.1.0/24
+		{IP: 0xFFFFFFFF, PrefixLen: 32}, // 255.255.255.255/32
+		{IP: 0x01020304, PrefixLen: 16}, // 1.2.3.4/16
 	}
 
 	b.ReportAllocs()

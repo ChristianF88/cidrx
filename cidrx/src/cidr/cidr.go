@@ -710,4 +710,3 @@ func (m *UserAgentMatcher) CountBlacklist() int {
 	}
 	return count
 }
-

@@ -58,9 +58,10 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 		return jsonOutput, nil, err
 	}
 
-	// Check if any trie config requires string fields (URI/UserAgent)
-	// If none do, skip string allocations for ~2x fewer allocs per line
+	// Check if any trie config requires string fields (URI/UserAgent) or non-IP fields
+	// If none do, skip allocations for dramatically fewer allocs per line
 	needsStringFields := false
+	needsNonIPFields := false
 	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
 	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
 	for _, tc := range cfg.StaticTries {
@@ -69,10 +70,14 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 		}
 		if hasGlobalUAFilters || tc.UserAgentRegex != "" || tc.EndpointRegex != "" {
 			needsStringFields = true
-			break
+			needsNonIPFields = true
+		}
+		if tc.StartTime != nil || tc.EndTime != nil {
+			needsNonIPFields = true
 		}
 	}
 	parser.SkipStringFields = !needsStringFields
+	parser.SkipNonIPFields = !needsNonIPFields
 
 	parseStart := time.Now()
 	requests, err := parser.ParseFileParallelChunked(cfg.Static.LogFile)
@@ -628,7 +633,6 @@ func processRequestsConcurrently(
 
 	return nil
 }
-
 
 // processRequestsSequentially provides optimized sequential processing for simple filtering cases.
 // Collects filtered IPs, then radix-sorts and batch-inserts for the same speed as the unfiltered fast path.

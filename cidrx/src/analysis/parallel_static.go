@@ -56,9 +56,9 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 		return jsonOutput, nil, err
 	}
 
-	// Check if any trie config requires string fields (URI/UserAgent)
-	// If none do, skip string allocations for faster parsing
+	// Check if any trie config requires string fields (URI/UserAgent) or non-IP fields
 	needsStringFields := false
+	needsNonIPFields := false
 	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
 	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
 	for _, tc := range cfg.StaticTries {
@@ -67,10 +67,14 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 		}
 		if hasGlobalUAFilters || tc.UserAgentRegex != "" || tc.EndpointRegex != "" {
 			needsStringFields = true
-			break
+			needsNonIPFields = true
+		}
+		if tc.StartTime != nil || tc.EndTime != nil {
+			needsNonIPFields = true
 		}
 	}
 	parser.SkipStringFields = !needsStringFields
+	parser.SkipNonIPFields = !needsNonIPFields
 
 	parseStart := time.Now()
 	requests, err := parser.ParseFileParallelChunked(cfg.Static.LogFile)
@@ -664,4 +668,3 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 		trieResult.Data = append(trieResult.Data, clusterResult)
 	}
 }
-

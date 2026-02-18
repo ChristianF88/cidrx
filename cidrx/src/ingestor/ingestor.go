@@ -47,14 +47,18 @@ func ParseMethod(m string) HTTPMethod {
 }
 
 type Request struct {
-	Timestamp time.Time  // Use native time
-	IP        net.IP     // Avoid string parsing multiple times (legacy, may be nil)
+	// Hot fields — first cache line (accessed by trie insertion, filtering, clustering)
+	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser
+	Status    uint16     // Smaller type for status code
+	Method    HTTPMethod // 1 byte
+	_         byte       // explicit padding for alignment
+	Bytes     uint32
+	Timestamp time.Time // 24 bytes — needed for time-range filtering
+
+	// Cold fields — second cache line (only accessed during output or string filtering)
 	URI       string
 	UserAgent string
-	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser
-	Method    HTTPMethod
-	Status    uint16     // Smaller type for status code
-	Bytes     uint32
+	IP        net.IP // Legacy (TCP ingestor path only, nil from log parser)
 }
 
 // GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil.

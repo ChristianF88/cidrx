@@ -52,7 +52,7 @@ type NodeAllocator struct {
 func NewNodeAllocator() *NodeAllocator {
 	return &NodeAllocator{
 		chunks:    make([][]TrieNode, 0, 10),
-		chunkSize: 1024, // Allocate nodes in chunks of 1024
+		chunkSize: 16384, // Allocate nodes in chunks of 16K (~320KB per chunk, reduces mutex acquisitions)
 	}
 }
 

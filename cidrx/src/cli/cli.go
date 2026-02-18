@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	"github.com/ChristianF88/cidrx/config"
@@ -89,7 +88,7 @@ var (
 	}
 
 	// Live-specific flags
-	portFlag = &cli.IntFlag{
+	portFlag = &cli.StringFlag{
 		Name:  "port",
 		Usage: "Port to listen on",
 	}
@@ -167,22 +166,6 @@ func validateConfigModeFlags(c *cli.Context, allowedFlags []string) error {
 	return nil
 }
 
-func validateRegexPatterns(c *cli.Context) error {
-	if useragentRegex := c.String("useragentRegex"); useragentRegex != "" {
-		if _, err := regexp.Compile(useragentRegex); err != nil {
-			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
-		}
-	}
-
-	if endpointRegex := c.String("endpointRegex"); endpointRegex != "" {
-		if _, err := regexp.Compile(endpointRegex); err != nil {
-			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
-		}
-	}
-
-	return nil
-}
-
 func validateCIDRRanges(c *cli.Context) error {
 	if rangesCidr := c.StringSlice("rangesCidr"); len(rangesCidr) > 0 {
 		for _, cidr := range rangesCidr {
@@ -234,13 +217,6 @@ func parseFlexibleTime(input string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid time format: %s", input)
 }
 
-func parseClusterArgSets(clusterArgSets []string) ([]string, error) {
-	if len(clusterArgSets)%4 != 0 {
-		return nil, fmt.Errorf("invalid cluster argument sets. Each set should contain 4 comma-separated values: minClusterSize,minDepth,maxDepth,meanSubnetDifference")
-	}
-	return clusterArgSets, nil
-}
-
 // Command handler functions to reduce deep nesting
 
 // handleLiveCommand processes the live command with proper separation of concerns
@@ -274,27 +250,61 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	return LiveFromConfig(cfg)
 }
 
-// handleLiveFlagsMode handles live command when using CLI flags only
+// handleLiveFlagsMode handles live command when using CLI flags only.
+// It builds a full Config struct and delegates to LiveFromConfig so that
+// all features (filtering, whitelist/blacklist, custom clusters) work
+// identically whether the user provides a config file or CLI flags.
 func handleLiveFlagsMode(c *cli.Context) error {
-	// Validate required flags
 	if !c.IsSet("port") || !c.IsSet("jailFile") || !c.IsSet("banFile") {
 		return fmt.Errorf("port, jailFile, and banFile are required when not using --config")
 	}
 
-	// Check for advanced features that require config mode
-	if c.IsSet("useragentRegex") || c.IsSet("endpointRegex") || c.IsSet("rangesCidr") || c.IsSet("plotPath") {
-		return fmt.Errorf("advanced features (useragentRegex, endpointRegex, rangesCidr, plotPath) require --config mode. Please use a configuration file")
+	cfg := &config.Config{
+		Global: &config.GlobalConfig{
+			JailFile:           c.String("jailFile"),
+			BanFile:            c.String("banFile"),
+			Whitelist:          c.String("whitelist"),
+			Blacklist:          c.String("blacklist"),
+			UserAgentWhitelist: c.String("userAgentWhitelist"),
+			UserAgentBlacklist: c.String("userAgentBlacklist"),
+		},
+		Live: &config.LiveConfig{
+			Port: c.String("port"),
+		},
+		LiveTries: make(map[string]*config.SlidingTrieConfig),
 	}
 
-	fmt.Println("Running in live mode with CLI flags:")
-	return Live(
-		c.String("port"),
-		c.String("jailFile"),
-		c.String("banFile"),
-		c.Duration("slidingWindowMaxTime"),
-		c.Int("slidingWindowMaxSize"),
-		c.Int("sleepBetweenIterations"),
-	)
+	slidingConfig := &config.SlidingTrieConfig{
+		UserAgentRegex:         c.String("useragentRegex"),
+		EndpointRegex:          c.String("endpointRegex"),
+		SlidingWindowMaxTime:   c.Duration("slidingWindowMaxTime"),
+		SlidingWindowMaxSize:   c.Int("slidingWindowMaxSize"),
+		SleepBetweenIterations: c.Int("sleepBetweenIterations"),
+	}
+
+	if err := slidingConfig.CompileRegex(); err != nil {
+		return err
+	}
+
+	clusterArgs, err := config.ParseClusterArgSetsFromStrings(c.StringSlice("clusterArgSet"))
+	if err != nil {
+		return err
+	}
+	if len(clusterArgs) == 0 {
+		// Default cluster config when none provided
+		clusterArgs = []config.ClusterArgSet{{
+			MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2,
+		}}
+		slidingConfig.UseForJail = []bool{true}
+	} else {
+		for range clusterArgs {
+			slidingConfig.UseForJail = append(slidingConfig.UseForJail, true)
+		}
+	}
+	slidingConfig.ClusterArgSets = clusterArgs
+
+	cfg.LiveTries["cli_default"] = slidingConfig
+	return LiveFromConfig(cfg)
 }
 
 // handleStaticCommand processes the static command with proper separation of concerns
@@ -319,10 +329,6 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	if cfg.Static == nil {
-		return fmt.Errorf("static configuration section missing in config file")
-	}
-
 	// Validate logfile exists
 	if err := validateLogFileExists(cfg.Static.LogFile); err != nil {
 		return err
@@ -337,70 +343,83 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 	return StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
 }
 
-// handleStaticFlagsMode handles static command when using CLI flags only
+// handleStaticFlagsMode handles static command when using CLI flags only.
+// It builds a full Config struct and delegates to StaticFromConfig so that
+// all features (regex filtering, whitelist/blacklist, jail, CIDR ranges)
+// work identically whether the user provides a config file or CLI flags.
 func handleStaticFlagsMode(c *cli.Context) error {
-	// Validate required flags
 	if !c.IsSet("logfile") {
 		return fmt.Errorf("logfile is required when not using --config")
 	}
 
-	// Validate logfile exists
 	if err := validateLogFileExists(c.String("logfile")); err != nil {
 		return err
 	}
 
-	// Parse time arguments
-	var st, et time.Time
-	var err error
+	cfg := &config.Config{
+		Global: &config.GlobalConfig{
+			JailFile:           c.String("jailFile"),
+			BanFile:            c.String("banFile"),
+			Whitelist:          c.String("whitelist"),
+			Blacklist:          c.String("blacklist"),
+			UserAgentWhitelist: c.String("userAgentWhitelist"),
+			UserAgentBlacklist: c.String("userAgentBlacklist"),
+		},
+		Static: &config.StaticConfig{
+			LogFile:   c.String("logfile"),
+			LogFormat: c.String("logFormat"),
+			PlotPath:  c.String("plotPath"),
+		},
+		StaticTries: make(map[string]*config.TrieConfig),
+	}
 
+	trieConfig := &config.TrieConfig{
+		UserAgentRegex: c.String("useragentRegex"),
+		EndpointRegex:  c.String("endpointRegex"),
+		CIDRRanges:     c.StringSlice("rangesCidr"),
+	}
+
+	// Compile and validate regex patterns
+	if err := trieConfig.CompileRegex(); err != nil {
+		return err
+	}
+
+	// Parse time arguments
 	if start := c.String("startTime"); start != "" {
-		if st, err = parseFlexibleTime(start); err != nil {
+		st, err := parseFlexibleTime(start)
+		if err != nil {
 			return fmt.Errorf("error parsing start time: %w", err)
 		}
-		fmt.Printf("Start Time: %s\n", st)
+		trieConfig.StartTime = &st
 	}
-
 	if end := c.String("endTime"); end != "" {
-		if et, err = parseFlexibleTime(end); err != nil {
+		et, err := parseFlexibleTime(end)
+		if err != nil {
 			return fmt.Errorf("error parsing end time: %w", err)
 		}
-		fmt.Printf("End Time: %s\n", et)
+		trieConfig.EndTime = &et
 	}
 
-	// Parse and validate cluster arguments
-	clusterArgSets, err := parseClusterArgSets(c.StringSlice("clusterArgSets"))
+	// Parse cluster arguments
+	clusterArgs, err := config.ParseClusterArgSetsFromStrings(c.StringSlice("clusterArgSets"))
 	if err != nil {
 		return err
 	}
+	trieConfig.ClusterArgSets = clusterArgs
 
-	// Validate patterns and ranges
-	if err := validateRegexPatterns(c); err != nil {
-		return err
-	}
-
+	// Validate CIDR ranges
 	if err := validateCIDRRanges(c); err != nil {
 		return err
 	}
 
+	// Validate plot path
 	if err := validatePlotPath(c.String("plotPath")); err != nil {
 		return err
 	}
 
-	// Use unified static interface
-	return Static(
-		c.String("logfile"),
-		c.String("logFormat"),
-		st,
-		et,
-		c.String("useragentRegex"),
-		c.String("endpointRegex"),
-		clusterArgSets,
-		c.StringSlice("rangesCidr"),
-		c.String("plotPath"),
-		c.Bool("compact"),
-		c.Bool("plain"),
-		c.Bool("tui"),
-	)
+	cfg.StaticTries["cli_trie"] = trieConfig
+
+	return StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
 }
 
 var App = &cli.App{

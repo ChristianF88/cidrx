@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,6 @@ var JailFile string = filepath.Join(HomeDir, "jail.json")
 var BanFile string = filepath.Join(HomeDir, "banFile.txt")
 
 type GlobalConfig struct {
-	LogFile            string `toml:"logFile"`
 	JailFile           string `toml:"jailFile"`
 	BanFile            string `toml:"banFile"`
 	Whitelist          string `toml:"whitelist"`
@@ -164,9 +164,6 @@ func LoadConfig(configPath string) (*Config, error) {
 
 func parseGlobalConfig(m map[string]any) *GlobalConfig {
 	config := &GlobalConfig{}
-	if v, ok := m["logFile"].(string); ok {
-		config.LogFile = v
-	}
 	if v, ok := m["jailFile"].(string); ok {
 		config.JailFile = v
 	}
@@ -210,166 +207,130 @@ func parseLiveConfig(m map[string]any) *LiveConfig {
 	return config
 }
 
-func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
-	config := &TrieConfig{}
+// parseRegexFields extracts and sets regex strings from a TOML map.
+func parseRegexFields(m map[string]any) (useragentRegex, endpointRegex string) {
 	if v, ok := m["useragentRegex"].(string); ok {
-		config.UserAgentRegex = v
-		if v != "" {
-			compiled, err := regexp.Compile(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid useragentRegex %q: %w", v, err)
-			}
-			config.userAgentRegexCompiled = compiled
-		}
+		useragentRegex = v
 	}
 	if v, ok := m["endpointRegex"].(string); ok {
-		config.EndpointRegex = v
-		if v != "" {
-			compiled, err := regexp.Compile(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid endpointRegex %q: %w", v, err)
+		endpointRegex = v
+	}
+	return
+}
+
+// parseClusterArgSetsFromTOML parses cluster argument sets from TOML nested arrays.
+func parseClusterArgSetsFromTOML(m map[string]any) []ClusterArgSet {
+	v, ok := m["clusterArgSets"].([]any)
+	if !ok {
+		return nil
+	}
+	var sets []ClusterArgSet
+	for _, item := range v {
+		arr, ok := item.([]any)
+		if !ok {
+			continue
+		}
+		var argSet []float64
+		for _, val := range arr {
+			switch f := val.(type) {
+			case float64:
+				argSet = append(argSet, f)
+			case int64:
+				argSet = append(argSet, float64(f))
 			}
-			config.endpointRegexCompiled = compiled
+		}
+		if len(argSet) >= 4 {
+			minDepth := uint32(argSet[1])
+			maxDepth := uint32(argSet[2])
+			if minDepth > maxDepth {
+				continue
+			}
+			sets = append(sets, ClusterArgSet{
+				MinClusterSize:       uint32(argSet[0]),
+				MinDepth:             minDepth,
+				MaxDepth:             maxDepth,
+				MeanSubnetDifference: argSet[3],
+			})
 		}
 	}
-	if v, ok := m["startTime"].(string); ok {
-		if v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				config.StartTime = &t
-			} else {
-				config.StartTimeRaw = v // Store for warning
-			}
+	return sets
+}
+
+// parseUseForJail parses the useForJail boolean array from a TOML map.
+func parseUseForJail(m map[string]any) []bool {
+	v, ok := m["useForJail"].([]any)
+	if !ok {
+		return nil
+	}
+	var result []bool
+	for _, item := range v {
+		if b, ok := item.(bool); ok {
+			result = append(result, b)
 		}
 	}
-	if v, ok := m["endTime"].(string); ok {
-		if v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				config.EndTime = &t
-			} else {
-				config.EndTimeRaw = v // Store for warning
-			}
+	return result
+}
+
+func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
+	uaRegex, epRegex := parseRegexFields(m)
+	tc := &TrieConfig{
+		UserAgentRegex: uaRegex,
+		EndpointRegex:  epRegex,
+		ClusterArgSets: parseClusterArgSetsFromTOML(m),
+		UseForJail:     parseUseForJail(m),
+	}
+	if err := tc.CompileRegex(); err != nil {
+		return nil, err
+	}
+	if v, ok := m["startTime"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			tc.StartTime = &t
+		} else {
+			tc.StartTimeRaw = v
+		}
+	}
+	if v, ok := m["endTime"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			tc.EndTime = &t
+		} else {
+			tc.EndTimeRaw = v
 		}
 	}
 	if v, ok := m["cidrRanges"].([]any); ok {
 		for _, item := range v {
 			if str, ok := item.(string); ok {
-				config.CIDRRanges = append(config.CIDRRanges, str)
+				tc.CIDRRanges = append(tc.CIDRRanges, str)
 			}
 		}
 	}
-	if v, ok := m["clusterArgSets"].([]any); ok {
-		for _, item := range v {
-			if arr, ok := item.([]any); ok {
-				var argSet []float64
-				for _, val := range arr {
-					if f, ok := val.(float64); ok {
-						argSet = append(argSet, f)
-					} else if i, ok := val.(int64); ok {
-						argSet = append(argSet, float64(i))
-					}
-				}
-				// Convert to ClusterArgSet with proper types
-				if len(argSet) >= 4 {
-					minDepth := uint32(argSet[1])
-					maxDepth := uint32(argSet[2])
-					// Validate depth parameters
-					if minDepth > maxDepth {
-						// Skip invalid cluster arg sets
-						continue
-					}
-					config.ClusterArgSets = append(config.ClusterArgSets, ClusterArgSet{
-						MinClusterSize:       uint32(argSet[0]),
-						MinDepth:             minDepth,
-						MaxDepth:             maxDepth,
-						MeanSubnetDifference: argSet[3],
-					})
-				}
-			}
-		}
-	}
-	if v, ok := m["useForJail"].([]any); ok {
-		for _, item := range v {
-			if b, ok := item.(bool); ok {
-				config.UseForJail = append(config.UseForJail, b)
-			}
-		}
-	}
-	return config, nil
+	return tc, nil
 }
 
 func parseSlidingTrieConfig(m map[string]any) (*SlidingTrieConfig, error) {
-	config := &SlidingTrieConfig{}
-	if v, ok := m["useragentRegex"].(string); ok {
-		config.UserAgentRegex = v
-		if v != "" {
-			compiled, err := regexp.Compile(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid useragentRegex %q: %w", v, err)
-			}
-			config.userAgentRegexCompiled = compiled
-		}
+	uaRegex, epRegex := parseRegexFields(m)
+	stc := &SlidingTrieConfig{
+		UserAgentRegex: uaRegex,
+		EndpointRegex:  epRegex,
+		ClusterArgSets: parseClusterArgSetsFromTOML(m),
+		UseForJail:     parseUseForJail(m),
 	}
-	if v, ok := m["endpointRegex"].(string); ok {
-		config.EndpointRegex = v
-		if v != "" {
-			compiled, err := regexp.Compile(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid endpointRegex %q: %w", v, err)
-			}
-			config.endpointRegexCompiled = compiled
-		}
+	if err := stc.CompileRegex(); err != nil {
+		return nil, err
 	}
 	if v, ok := m["slidingWindowMaxTime"].(string); ok {
 		duration, err := time.ParseDuration(v)
 		if err != nil {
 			return nil, fmt.Errorf("invalid slidingWindowMaxTime %q: %w", v, err)
 		}
-		config.SlidingWindowMaxTime = duration
+		stc.SlidingWindowMaxTime = duration
 	}
 	if v, ok := m["slidingWindowMaxSize"].(int64); ok {
-		config.SlidingWindowMaxSize = int(v)
+		stc.SlidingWindowMaxSize = int(v)
 	}
 	if v, ok := m["sleepBetweenIterations"].(int64); ok {
-		config.SleepBetweenIterations = int(v)
+		stc.SleepBetweenIterations = int(v)
 	}
-	if v, ok := m["clusterArgSets"].([]any); ok {
-		for _, item := range v {
-			if arr, ok := item.([]any); ok {
-				var argSet []float64
-				for _, val := range arr {
-					if f, ok := val.(float64); ok {
-						argSet = append(argSet, f)
-					} else if i, ok := val.(int64); ok {
-						argSet = append(argSet, float64(i))
-					}
-				}
-				// Convert to ClusterArgSet with proper types
-				if len(argSet) >= 4 {
-					minDepth := uint32(argSet[1])
-					maxDepth := uint32(argSet[2])
-					// Validate depth parameters
-					if minDepth > maxDepth {
-						// Skip invalid cluster arg sets
-						continue
-					}
-					config.ClusterArgSets = append(config.ClusterArgSets, ClusterArgSet{
-						MinClusterSize:       uint32(argSet[0]),
-						MinDepth:             minDepth,
-						MaxDepth:             maxDepth,
-						MeanSubnetDifference: argSet[3],
-					})
-				}
-			}
-		}
-	}
-	if v, ok := m["useForJail"].([]any); ok {
-		for _, item := range v {
-			if b, ok := item.(bool); ok {
-				config.UseForJail = append(config.UseForJail, b)
-			}
-		}
-	}
-	return config, nil
+	return stc, nil
 }
 
 func (c *Config) GetJailFile() string {
@@ -384,42 +345,6 @@ func (c *Config) GetBanFile() string {
 		return c.Global.BanFile
 	}
 	return BanFile
-}
-
-func (c *Config) ValidateStatic() error {
-	if c.Static == nil {
-		return fmt.Errorf("static configuration section is required")
-	}
-
-	if c.Static.LogFile == "" {
-		return fmt.Errorf("logFile is required in static configuration")
-	}
-
-	if c.Static.LogFormat == "" {
-		return fmt.Errorf("logFormat is required in static configuration")
-	}
-
-	// Check if logfile exists
-	if _, err := os.Stat(c.Static.LogFile); os.IsNotExist(err) {
-		return fmt.Errorf("logfile does not exist: %s", c.Static.LogFile)
-	}
-
-	// Validate required global fields for static mode
-	if c.Global == nil {
-		return fmt.Errorf("global configuration section is required for static mode")
-	}
-
-	if c.Global.JailFile == "" {
-		return fmt.Errorf("jailFile is required in global configuration for static mode")
-	}
-
-	if c.Global.BanFile == "" {
-		return fmt.Errorf("banFile is required in global configuration for static mode")
-	}
-
-	// PlotPath is optional - no validation needed if empty
-
-	return nil
 }
 
 func (c *Config) ValidateLive() error {
@@ -473,14 +398,18 @@ func (tc *TrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
 
 // ShouldIncludeRequest checks if a request should be included based on regex filters
 func (stc *SlidingTrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
-	// Apply useragent regex filter
-	if stc.userAgentRegexCompiled != nil && !stc.userAgentRegexCompiled.MatchString(req.UserAgent) {
-		return false
+	// Apply useragent regex filter (short-circuit on empty UserAgent)
+	if stc.userAgentRegexCompiled != nil {
+		if req.UserAgent == "" || !stc.userAgentRegexCompiled.MatchString(req.UserAgent) {
+			return false
+		}
 	}
 
-	// Apply endpoint regex filter
-	if stc.endpointRegexCompiled != nil && !stc.endpointRegexCompiled.MatchString(req.URI) {
-		return false
+	// Apply endpoint regex filter (short-circuit on empty URI)
+	if stc.endpointRegexCompiled != nil {
+		if req.URI == "" || !stc.endpointRegexCompiled.MatchString(req.URI) {
+			return false
+		}
 	}
 
 	return true
@@ -502,6 +431,88 @@ func (c *Config) LoadBlacklistCIDRs() ([]string, error) {
 	}
 
 	return loadCIDRFile(c.Global.Blacklist)
+}
+
+// CompileRegex compiles the regex patterns for a TrieConfig.
+// Call this after building a TrieConfig from CLI flags so that
+// ShouldIncludeRequest works correctly.
+func (tc *TrieConfig) CompileRegex() error {
+	if tc.UserAgentRegex != "" {
+		compiled, err := regexp.Compile(tc.UserAgentRegex)
+		if err != nil {
+			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
+		}
+		tc.userAgentRegexCompiled = compiled
+	}
+	if tc.EndpointRegex != "" {
+		compiled, err := regexp.Compile(tc.EndpointRegex)
+		if err != nil {
+			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
+		}
+		tc.endpointRegexCompiled = compiled
+	}
+	return nil
+}
+
+// CompileRegex compiles the regex patterns for a SlidingTrieConfig.
+func (stc *SlidingTrieConfig) CompileRegex() error {
+	if stc.UserAgentRegex != "" {
+		compiled, err := regexp.Compile(stc.UserAgentRegex)
+		if err != nil {
+			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
+		}
+		stc.userAgentRegexCompiled = compiled
+	}
+	if stc.EndpointRegex != "" {
+		compiled, err := regexp.Compile(stc.EndpointRegex)
+		if err != nil {
+			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
+		}
+		stc.endpointRegexCompiled = compiled
+	}
+	return nil
+}
+
+// ParseClusterArgSetsFromStrings parses flat string arrays (from CLI flags)
+// into ClusterArgSet slices. Each set consists of 4 consecutive values:
+// minClusterSize, minDepth, maxDepth, meanSubnetDifference.
+func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	if len(args)%4 != 0 {
+		return nil, fmt.Errorf("invalid cluster argument sets: each set requires 4 values (minClusterSize,minDepth,maxDepth,meanSubnetDifference)")
+	}
+
+	sets := make([]ClusterArgSet, 0, len(args)/4)
+	for i := 0; i < len(args); i += 4 {
+		minClusterSize, err := strconv.ParseFloat(args[i], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid minClusterSize %q: %w", args[i], err)
+		}
+		minDepth, err := strconv.ParseFloat(args[i+1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid minDepth %q: %w", args[i+1], err)
+		}
+		maxDepth, err := strconv.ParseFloat(args[i+2], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid maxDepth %q: %w", args[i+2], err)
+		}
+		meanSubnetDiff, err := strconv.ParseFloat(args[i+3], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid meanSubnetDifference %q: %w", args[i+3], err)
+		}
+		if minDepth > maxDepth {
+			return nil, fmt.Errorf("minDepth (%.0f) must be <= maxDepth (%.0f)", minDepth, maxDepth)
+		}
+		sets = append(sets, ClusterArgSet{
+			MinClusterSize:       uint32(minClusterSize),
+			MinDepth:             uint32(minDepth),
+			MaxDepth:             uint32(maxDepth),
+			MeanSubnetDifference: meanSubnetDiff,
+		})
+	}
+	return sets, nil
 }
 
 // LoadUserAgentWhitelistPatterns loads User-Agent patterns from whitelist file

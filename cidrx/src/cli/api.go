@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,27 +36,7 @@ type OutputConfig struct {
 // MAIN ENTRY POINTS - These are the only functions that should be called externally
 // ============================================================================
 
-// Static is the unified static analysis function - handles all static analysis cases
-func Static(logFile, logFormat string, startTime, endTime time.Time, useragentRegex, endpointRegex string,
-	clusterArgSets []string, rangesCidr []string, plotPath string, compact, plain, tui bool) error {
-
-	// Create config.Config directly from CLI parameters - no intermediate structs
-	cfg, err := createConfigFromCLI(logFile, logFormat, startTime, endTime, useragentRegex, endpointRegex, clusterArgSets, rangesCidr, plotPath)
-	if err != nil {
-		return fmt.Errorf("creating config from CLI: %w", err)
-	}
-
-	outputConfig := OutputConfig{
-		Compact: compact,
-		Plain:   plain,
-		TUI:     tui,
-	}
-
-	// Use the same execution path regardless of input source
-	return executeStaticAnalysis(cfg, outputConfig)
-}
-
-// StaticFromConfig runs static analysis from config file
+// StaticFromConfig runs static analysis from a Config struct
 func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) error {
 	outputConfig := OutputConfig{
 		Compact: compact,
@@ -67,17 +46,6 @@ func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) error {
 
 	// Use the same execution path regardless of input source
 	return executeStaticAnalysis(cfg, outputConfig)
-}
-
-// Live runs live mode analysis
-func Live(port, jailFile, banFile string, slidingWindowMaxTime time.Duration, slidingWindowMaxSize int, sleepBetweenIterations int) error {
-	// Create config.Config directly from CLI parameters
-	cfg, err := createLiveConfigFromCLI(port, jailFile, banFile, slidingWindowMaxTime, slidingWindowMaxSize, sleepBetweenIterations)
-	if err != nil {
-		return fmt.Errorf("creating live config from CLI: %w", err)
-	}
-
-	return executeLiveAnalysis(cfg)
 }
 
 // ============================================================================
@@ -149,147 +117,10 @@ func executeTUI(cfg *config.Config) error {
 }
 
 // ============================================================================
-// HELPER FUNCTIONS - Conversion and utility functions
-// ============================================================================
-
-// createConfigFromCLI creates a config.Config directly from CLI parameters for static mode
-// This eliminates the need for intermediate structs like StaticAnalysisConfig
-func createConfigFromCLI(logFile, logFormat string, startTime, endTime time.Time, useragentRegex, endpointRegex string,
-	clusterArgSets []string, rangesCidr []string, plotPath string) (*config.Config, error) {
-
-	// Create a config structure from CLI arguments - same structure as config file
-	cfg := &config.Config{
-		Static: &config.StaticConfig{
-			LogFile:   logFile,
-			LogFormat: logFormat,
-			PlotPath:  plotPath,
-		},
-		StaticTries: make(map[string]*config.TrieConfig),
-	}
-
-	// Create a single trie config from CLI arguments
-	trieConfig := &config.TrieConfig{
-		UserAgentRegex: useragentRegex,
-		EndpointRegex:  endpointRegex,
-		CIDRRanges:     rangesCidr,
-	}
-
-	// Set time range if provided
-	if !startTime.IsZero() {
-		trieConfig.StartTime = &startTime
-	}
-	if !endTime.IsZero() {
-		trieConfig.EndTime = &endTime
-	}
-
-	// Parse cluster arg sets using shared logic
-	clusterArgSetsResult, useForJail, err := parseClusterArguments(clusterArgSets)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert [][]float64 to []ClusterArgSet
-	for _, argSet := range clusterArgSetsResult {
-		if len(argSet) >= 4 {
-			trieConfig.ClusterArgSets = append(trieConfig.ClusterArgSets, config.ClusterArgSet{
-				MinClusterSize:       uint32(argSet[0]),
-				MinDepth:             uint32(argSet[1]),
-				MaxDepth:             uint32(argSet[2]),
-				MeanSubnetDifference: argSet[3],
-			})
-		}
-	}
-	trieConfig.UseForJail = useForJail
-
-	cfg.StaticTries["cli_trie"] = trieConfig
-	return cfg, nil
-}
-
-// createLiveConfigFromCLI creates a config.Config directly from CLI parameters for live mode
-func createLiveConfigFromCLI(port, jailFile, banFile string, slidingWindowMaxTime time.Duration, slidingWindowMaxSize int, sleepBetweenIterations int) (*config.Config, error) {
-	// Create a config structure from CLI arguments - same structure as config file
-	cfg := &config.Config{
-		Global: &config.GlobalConfig{
-			JailFile: jailFile,
-			BanFile:  banFile,
-		},
-		Live: &config.LiveConfig{
-			Port: port,
-		},
-		LiveTries: make(map[string]*config.SlidingTrieConfig),
-	}
-
-	// Create a default sliding window config from CLI parameters
-	cfg.LiveTries["cli_default"] = &config.SlidingTrieConfig{
-		SlidingWindowMaxTime:   slidingWindowMaxTime,
-		SlidingWindowMaxSize:   slidingWindowMaxSize,
-		SleepBetweenIterations: sleepBetweenIterations,
-		ClusterArgSets: []config.ClusterArgSet{
-			{
-				MinClusterSize:       1000,
-				MinDepth:             30,
-				MaxDepth:             32,
-				MeanSubnetDifference: 0.2,
-			},
-		},
-		UseForJail: []bool{true},
-	}
-
-	return cfg, nil
-}
-
-// parseClusterArguments parses cluster argument sets and returns the parsed cluster configuration
-func parseClusterArguments(clusterArgSets []string) ([][]float64, []bool, error) {
-	var clusterArgSetsResult [][]float64
-	var useForJailResult []bool
-
-	if len(clusterArgSets) == 0 {
-		return clusterArgSetsResult, useForJailResult, nil
-	}
-
-	for i := 0; i < len(clusterArgSets); i += 4 {
-		if i+3 >= len(clusterArgSets) {
-			return nil, nil, fmt.Errorf("invalid cluster argument sets: each set should contain 4 values")
-		}
-
-		minClusterSize, err := strconv.ParseFloat(clusterArgSets[i], 64)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid minClusterSize: %w", err)
-		}
-
-		minDepth, err := strconv.ParseFloat(clusterArgSets[i+1], 64)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid minDepth: %w", err)
-		}
-
-		maxDepth, err := strconv.ParseFloat(clusterArgSets[i+2], 64)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid maxDepth: %w", err)
-		}
-
-		meanSubnetDifference, err := strconv.ParseFloat(clusterArgSets[i+3], 64)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid meanSubnetDifference: %w", err)
-		}
-
-		// Validate depth parameters
-		if minDepth > maxDepth {
-			return nil, nil, fmt.Errorf("minDepth (%.0f) must be less than or equal to maxDepth (%.0f)", minDepth, maxDepth)
-		}
-
-		argSet := []float64{minClusterSize, minDepth, maxDepth, meanSubnetDifference}
-		clusterArgSetsResult = append(clusterArgSetsResult, argSet)
-		useForJailResult = append(useForJailResult, false) // CLI mode sets all to false
-	}
-
-	return clusterArgSetsResult, useForJailResult, nil
-}
-
-// ============================================================================
 // LIVE MODE IMPLEMENTATION
 // ============================================================================
 
-// LiveFromConfig runs live mode from config file
+// LiveFromConfig runs live mode from a Config struct
 func LiveFromConfig(cfg *config.Config) error {
 	return executeLiveAnalysis(cfg)
 }

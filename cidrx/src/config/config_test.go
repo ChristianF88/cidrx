@@ -72,10 +72,6 @@ useForJail = [true, false]
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	if config.Global.LogFile != "/var/log/cidrx.log" {
-		t.Errorf("Expected LogFile to be '/var/log/cidrx.log', got '%s'", config.Global.LogFile)
-	}
-
 	if config.Global.JailFile != "/etc/cidrx/jail.json" {
 		t.Errorf("Expected JailFile to be '/etc/cidrx/jail.json', got '%s'", config.Global.JailFile)
 	}
@@ -281,85 +277,6 @@ useForJail = [true]
 	}
 }
 
-func TestStaticConfigValidation(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a test log file
-	testLogFile := filepath.Join(tmpDir, "test.log")
-	err := os.WriteFile(testLogFile, []byte("test log content"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test log file: %v", err)
-	}
-
-	tests := []struct {
-		name        string
-		config      *Config
-		expectError bool
-	}{
-		{
-			name: "valid static config",
-			config: &Config{
-				Global: &GlobalConfig{
-					JailFile: filepath.Join(tmpDir, "jail.json"),
-					BanFile:  filepath.Join(tmpDir, "ban.txt"),
-				},
-				Static: &StaticConfig{
-					LogFile:   testLogFile,
-					LogFormat: "%h %^ %^ [%t] \"%r\" %s %b",
-				},
-			},
-			expectError: false,
-		},
-		{
-			name: "missing static section",
-			config: &Config{
-				Static: nil,
-			},
-			expectError: true,
-		},
-		{
-			name: "missing log file",
-			config: &Config{
-				Static: &StaticConfig{
-					LogFormat: "%h %^ %^ [%t] \"%r\" %s %b",
-				},
-			},
-			expectError: true,
-		},
-		{
-			name: "missing log format",
-			config: &Config{
-				Static: &StaticConfig{
-					LogFile: testLogFile,
-				},
-			},
-			expectError: true,
-		},
-		{
-			name: "non-existent log file",
-			config: &Config{
-				Static: &StaticConfig{
-					LogFile:   "/nonexistent/file.log",
-					LogFormat: "%h %^ %^ [%t] \"%r\" %s %b",
-				},
-			},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.ValidateStatic()
-			if tt.expectError && err == nil {
-				t.Error("Expected validation error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("Expected no validation error but got: %v", err)
-			}
-		})
-	}
-}
-
 func TestLiveConfigValidation(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -528,12 +445,6 @@ port = "8080"
 	config, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Test static validation with minimal fields
-	err = config.ValidateStatic()
-	if err != nil {
-		t.Errorf("Expected static validation to pass with minimal required fields, got: %v", err)
 	}
 
 	// Test live validation with minimal fields
@@ -977,4 +888,115 @@ endpointRegex = ""
 	if !trie1.ShouldIncludeRequest(testRequest) {
 		t.Error("Expected trie_1 to accept all requests when regex filters are empty")
 	}
+}
+
+func TestCompileRegex(t *testing.T) {
+	t.Run("valid regex compiles", func(t *testing.T) {
+		tc := &TrieConfig{
+			UserAgentRegex: ".*bot.*",
+			EndpointRegex:  "/api/.*",
+		}
+		if err := tc.CompileRegex(); err != nil {
+			t.Fatalf("CompileRegex failed: %v", err)
+		}
+		req := ingestor.Request{UserAgent: "Googlebot", URI: "/api/users", IP: net.ParseIP("1.2.3.4")}
+		if !tc.ShouldIncludeRequest(req) {
+			t.Error("Expected matching request to be included")
+		}
+		req2 := ingestor.Request{UserAgent: "Mozilla", URI: "/home", IP: net.ParseIP("1.2.3.4")}
+		if tc.ShouldIncludeRequest(req2) {
+			t.Error("Expected non-matching request to be excluded")
+		}
+	})
+
+	t.Run("invalid regex returns error", func(t *testing.T) {
+		tc := &TrieConfig{UserAgentRegex: "[invalid"}
+		if err := tc.CompileRegex(); err == nil {
+			t.Error("Expected error for invalid regex")
+		}
+	})
+
+	t.Run("empty regex is no-op", func(t *testing.T) {
+		tc := &TrieConfig{}
+		if err := tc.CompileRegex(); err != nil {
+			t.Fatalf("CompileRegex failed on empty: %v", err)
+		}
+		req := ingestor.Request{UserAgent: "anything", URI: "/any", IP: net.ParseIP("1.2.3.4")}
+		if !tc.ShouldIncludeRequest(req) {
+			t.Error("Expected all requests accepted with no regex")
+		}
+	})
+
+	t.Run("sliding trie config compiles", func(t *testing.T) {
+		stc := &SlidingTrieConfig{
+			UserAgentRegex: ".*scanner.*",
+			EndpointRegex:  "/admin/.*",
+		}
+		if err := stc.CompileRegex(); err != nil {
+			t.Fatalf("CompileRegex failed: %v", err)
+		}
+		req := ingestor.Request{UserAgent: "nmap scanner", URI: "/admin/panel", IP: net.ParseIP("1.2.3.4")}
+		if !stc.ShouldIncludeRequest(req) {
+			t.Error("Expected matching request to be included")
+		}
+	})
+}
+
+func TestParseClusterArgSetsFromStrings(t *testing.T) {
+	t.Run("valid single set", func(t *testing.T) {
+		sets, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "32", "0.1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("expected 1 set, got %d", len(sets))
+		}
+		if sets[0].MinClusterSize != 1000 || sets[0].MinDepth != 24 || sets[0].MaxDepth != 32 {
+			t.Errorf("unexpected values: %+v", sets[0])
+		}
+	})
+
+	t.Run("valid multiple sets", func(t *testing.T) {
+		sets, err := ParseClusterArgSetsFromStrings([]string{
+			"1000", "24", "32", "0.1",
+			"500", "16", "24", "0.2",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sets) != 2 {
+			t.Fatalf("expected 2 sets, got %d", len(sets))
+		}
+	})
+
+	t.Run("empty returns nil", func(t *testing.T) {
+		sets, err := ParseClusterArgSetsFromStrings(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if sets != nil {
+			t.Errorf("expected nil, got %v", sets)
+		}
+	})
+
+	t.Run("not multiple of 4 fails", func(t *testing.T) {
+		_, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "32"})
+		if err == nil {
+			t.Error("expected error for incomplete set")
+		}
+	})
+
+	t.Run("invalid number fails", func(t *testing.T) {
+		_, err := ParseClusterArgSetsFromStrings([]string{"abc", "24", "32", "0.1"})
+		if err == nil {
+			t.Error("expected error for non-numeric value")
+		}
+	})
+
+	t.Run("minDepth > maxDepth fails", func(t *testing.T) {
+		_, err := ParseClusterArgSetsFromStrings([]string{"1000", "32", "24", "0.1"})
+		if err == nil {
+			t.Error("expected error when minDepth > maxDepth")
+		}
+	})
 }

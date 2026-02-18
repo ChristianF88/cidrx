@@ -172,6 +172,13 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	// Add results to output
 	jsonOutput.Tries = trieResults
 
+	// Set General.UniqueIPs to the max across all tries
+	for _, tr := range trieResults {
+		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
+			jsonOutput.General.UniqueIPs = tr.Stats.UniqueIPs
+		}
+	}
+
 	// Convert global User-Agent IP sets to slices for jail processing
 	for ip := range globalUserAgentWhitelistIPSet {
 		jsonOutput.UserAgentWhitelistIPs = append(jsonOutput.UserAgentWhitelistIPs, ip)

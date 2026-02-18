@@ -12,6 +12,14 @@ import (
 	"github.com/ChristianF88/cidrx/testutil"
 )
 
+func ipStringToUint32(s string) uint32 {
+	ip := net.ParseIP(s).To4()
+	if ip == nil {
+		return 0
+	}
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
 // Test data
 var (
 	apacheCombinedFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
@@ -43,11 +51,11 @@ func TestParallelParser_BasicParsing(t *testing.T) {
 	}
 
 	// Validate all fields were parsed correctly
-	if req.IP == nil {
-		t.Error("IP should not be nil")
+	if req.IPUint32 == 0 {
+		t.Error("IP should not be zero")
 	}
-	if req.IP.String() != "14.191.169.89" {
-		t.Errorf("Expected IP 14.191.169.89, got %s", req.IP)
+	if req.IPUint32 != ipStringToUint32("14.191.169.89") {
+		t.Errorf("Expected IP 14.191.169.89, got %s", ingestor.Uint32ToIPString(req.IPUint32))
 	}
 
 	if req.Timestamp.IsZero() {
@@ -90,8 +98,8 @@ func TestParallelParser_CustomFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if req.IP.String() != "10.0.0.100" {
-		t.Errorf("Expected IP 10.0.0.100, got %s", req.IP)
+	if req.IPUint32 != ipStringToUint32("10.0.0.100") {
+		t.Errorf("Expected IP 10.0.0.100, got %s", ingestor.Uint32ToIPString(req.IPUint32))
 	}
 
 	if req.Method != ingestor.GET {
@@ -123,11 +131,11 @@ func TestParallelParser_DelimiterParsing(t *testing.T) {
 	}
 
 	// Validate that IP was parsed correctly (stopping at comma, not including it)
-	if req.IP == nil {
-		t.Error("IP should not be nil")
+	if req.IPUint32 == 0 {
+		t.Error("IP should not be zero")
 	}
-	if req.IP.String() != "189.115.84.87" {
-		t.Errorf("Expected IP 189.115.84.87, got %s", req.IP)
+	if req.IPUint32 != ipStringToUint32("189.115.84.87") {
+		t.Errorf("Expected IP 189.115.84.87, got %s", ingestor.Uint32ToIPString(req.IPUint32))
 	}
 
 	// Validate timestamp parsing
@@ -168,11 +176,11 @@ func TestParallelParser_StandaloneURI(t *testing.T) {
 	}
 
 	// Validate all fields were parsed correctly
-	if req.IP == nil {
-		t.Error("IP should not be nil")
+	if req.IPUint32 == 0 {
+		t.Error("IP should not be zero")
 	}
-	if req.IP.String() != "192.168.1.100" {
-		t.Errorf("Expected IP 192.168.1.100, got %s", req.IP)
+	if req.IPUint32 != ipStringToUint32("192.168.1.100") {
+		t.Errorf("Expected IP 192.168.1.100, got %s", ingestor.Uint32ToIPString(req.IPUint32))
 	}
 
 	// Validate method parsing
@@ -360,10 +368,10 @@ func TestParallelParser_ComprehensiveFormats(t *testing.T) {
 			}
 
 			// Validate IP
-			if req.IP == nil {
-				t.Error("IP should not be nil")
-			} else if req.IP.String() != tt.expectedIP {
-				t.Errorf("Expected IP %s, got %s", tt.expectedIP, req.IP.String())
+			if req.IPUint32 == 0 {
+				t.Error("IP should not be zero")
+			} else if req.IPUint32 != ipStringToUint32(tt.expectedIP) {
+				t.Errorf("Expected IP %s, got %s", tt.expectedIP, ingestor.Uint32ToIPString(req.IPUint32))
 			}
 
 			// Validate Method
@@ -489,10 +497,10 @@ func TestParallelParser_QuotedVsUnquotedParsing(t *testing.T) {
 				}
 
 				// Validate IP
-				if req.IP == nil {
-					t.Error("IP should not be nil")
-				} else if req.IP.String() != tt.expectedIP {
-					t.Errorf("Expected IP %s, got %s", tt.expectedIP, req.IP.String())
+				if req.IPUint32 == 0 {
+					t.Error("IP should not be zero")
+				} else if req.IPUint32 != ipStringToUint32(tt.expectedIP) {
+					t.Errorf("Expected IP %s, got %s", tt.expectedIP, ingestor.Uint32ToIPString(req.IPUint32))
 				}
 
 				// Validate Method
@@ -518,13 +526,13 @@ func TestParallelParser_QuotedVsUnquotedParsing(t *testing.T) {
 				// This test should fail or produce incorrect results
 				if err == nil {
 					t.Logf("Parsing succeeded but results may be incorrect:")
-					t.Logf("  IP: %v", req.IP)
+					t.Logf("  IP: %v", ingestor.Uint32ToIPString(req.IPUint32))
 					t.Logf("  Method: %v", req.Method)
 					t.Logf("  URI: %q", req.URI)
 					t.Logf("  Status: %d", req.Status)
 
 					// Check if results are actually wrong
-					correctResults := (req.IP != nil && req.IP.String() == tt.expectedIP &&
+					correctResults := (req.IPUint32 != 0 && req.IPUint32 == ipStringToUint32(tt.expectedIP) &&
 						req.Method == tt.expectedMethod &&
 						req.URI == tt.expectedURI &&
 						req.Status == tt.expectedStatus)
@@ -693,8 +701,8 @@ func TestParallelParser_VariousLogFormats(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if req.IP == nil || req.IP.String() != tt.expected.ip {
-				t.Errorf("Expected IP %s, got %v", tt.expected.ip, req.IP)
+			if req.IPUint32 == 0 || req.IPUint32 != ipStringToUint32(tt.expected.ip) {
+				t.Errorf("Expected IP %s, got %s", tt.expected.ip, ingestor.Uint32ToIPString(req.IPUint32))
 			}
 
 			if req.Method != tt.expected.method {
@@ -814,7 +822,7 @@ func TestParallelParser_FileProcessing(t *testing.T) {
 
 	// Validate first few requests to ensure parsing quality
 	for i, req := range requests[:min(10, len(requests))] {
-		if req.IP == nil {
+		if req.IPUint32 == 0 {
 			t.Errorf("Request %d: missing IP", i)
 		}
 		if req.Timestamp.IsZero() {
@@ -867,7 +875,7 @@ func BenchmarkParallelParser_ZeroAlloc(b *testing.B) {
 			b.Fatal(err)
 		}
 		// Reset fields that allocate
-		req.IP = nil
+		req.IPUint32 = 0
 		req.URI = ""
 		req.UserAgent = ""
 	}
@@ -984,7 +992,7 @@ func parseEventStaticMock(evt map[string]interface{}, out *ingestor.Request) err
 	// Simplified parsing similar to original static parser
 	fields := strings.Fields(msg)
 	if len(fields) > 0 {
-		out.IP = net.ParseIP(fields[0])
+		out.IPUint32 = ipStringToUint32(fields[0])
 	}
 
 	// Parse timestamp

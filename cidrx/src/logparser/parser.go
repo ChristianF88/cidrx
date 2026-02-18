@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"runtime"
 	"sync"
@@ -12,14 +11,6 @@ import (
 
 	"github.com/ChristianF88/cidrx/ingestor"
 )
-
-// maxInt returns the larger of two integers - used for buffer sizing optimization
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 // FieldExtractor represents a compiled field extraction operation
 type FieldExtractor struct {
@@ -38,10 +29,11 @@ type CompiledFormat struct {
 // Parser provides high-performance log parsing with adaptive I/O strategies
 // Combines parallel processing, object pooling, and ultra-fast field extraction
 type Parser struct {
-	format   string
-	compiled *CompiledFormat
-	workers  int
-	pool     *sync.Pool // Object pool for Request structs
+	format           string
+	compiled         *CompiledFormat
+	workers          int
+	pool             *sync.Pool // Object pool for Request structs
+	SkipStringFields bool       // When true, skip URI and UserAgent string allocations
 }
 
 // ParallelParser is an alias for Parser (backward compatibility)
@@ -110,7 +102,11 @@ func (pp *ParallelParser) ParseFile(filename string) ([]ingestor.Request, error)
 	return pp.parseFileWithConcurrentIO(file, fileSize)
 }
 
-// parseFileWithStreamingIO uses streaming I/O with parallel parsing workers (internal method)
+// parseBatchSize is the number of lines per batch sent through channels.
+// Batching amortizes channel lock/unlock overhead: 1M lines = ~1K channel ops instead of 1M.
+const parseBatchSize = 1024
+
+// parseFileWithStreamingIO uses streaming I/O with batched parallel parsing workers (internal method)
 func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.Request, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -125,33 +121,32 @@ func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.
 		estimatedLines = 1000
 	}
 
-	// Optimized channels - smaller buffers reduce memory overhead and improve cache locality
-	linesChan := make(chan []byte, pp.workers*4)              // Smaller buffer for better throughput
-	resultsChan := make(chan *ingestor.Request, pp.workers*4) // Match worker capacity
-
-	// Buffer pool for line copies with optimal sizes
-	bufferPool := &sync.Pool{
-		New: func() interface{} {
-			buf := make([]byte, 0, 512) // Most log lines are <512 bytes
-			return &buf
-		},
-	}
+	// Batched channels — each send/receive moves parseBatchSize items at once,
+	// reducing channel operations from O(lines) to O(lines/batchSize).
+	linesChan := make(chan [][]byte, pp.workers*2)
+	resultsChan := make(chan []ingestor.Request, pp.workers*2)
 
 	var wg sync.WaitGroup
 
-	// Start parser workers
+	// Capture SkipStringFields for use in worker goroutines
+	skipStrings := pp.SkipStringFields
+
+	// Start parser workers — each worker reuses a single Request for parsing
 	for i := 0; i < pp.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for line := range linesChan {
-				if req, err := pp.compiled.parseLineWithPool(line, pp.pool); err == nil {
-					resultsChan <- req
+			req := &ingestor.Request{}
+			for batch := range linesChan {
+				resBatch := make([]ingestor.Request, 0, len(batch))
+				for _, line := range batch {
+					*req = ingestor.Request{}
+					if err := pp.compiled.parseLineReuseOpt(line, req, skipStrings); err == nil {
+						resBatch = append(resBatch, *req)
+					}
 				}
-				// Return buffer to pool after processing
-				if cap(line) <= 2048 { // Only return reasonably sized buffers
-					emptyLine := line[:0]
-					bufferPool.Put(&emptyLine)
+				if len(resBatch) > 0 {
+					resultsChan <- resBatch
 				}
 			}
 		}()
@@ -164,33 +159,30 @@ func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.
 
 	go func() {
 		defer collectorWG.Done()
-		for req := range resultsChan {
-			results = append(results, *req)
-			// Return request object to pool
-			pp.pool.Put(req)
+		for batch := range resultsChan {
+			results = append(results, batch...)
 		}
 	}()
 
-	// I/O reader with optimized buffer management - use larger initial buffer
+	// I/O reader — accumulate lines into batches before sending
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024) // 2MB max, 256KB initial
+	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024) // 256KB initial, 2MB max
 
+	batch := make([][]byte, 0, parseBatchSize)
 	for scanner.Scan() {
 		scanBytes := scanner.Bytes()
+		lineCopy := make([]byte, len(scanBytes))
+		copy(lineCopy, scanBytes)
+		batch = append(batch, lineCopy)
 
-		// Get buffer from pool and copy line (necessary for concurrent processing)
-		bufferPtr := bufferPool.Get().(*[]byte)
-		buffer := *bufferPtr
-		if cap(buffer) < len(scanBytes) {
-			buffer = make([]byte, len(scanBytes), maxInt(len(scanBytes)*2, 512))
-			*bufferPtr = buffer
+		if len(batch) >= parseBatchSize {
+			linesChan <- batch
+			batch = make([][]byte, 0, parseBatchSize)
 		}
-		buffer = buffer[:len(scanBytes)]
-		*bufferPtr = buffer
-		copy(buffer, scanBytes)
-
-		// Send to workers with optimized blocking
-		linesChan <- buffer
+	}
+	// Send remaining lines
+	if len(batch) > 0 {
+		linesChan <- batch
 	}
 
 	// Shutdown pipeline
@@ -286,13 +278,14 @@ func (pp *ParallelParser) parseFileWithConcurrentIO(file *os.File, fileSize int6
 	}
 
 	// Start parser workers
+	skipStrings := pp.SkipStringFields
 	var parserWG sync.WaitGroup
 	for i := 0; i < pp.workers; i++ {
 		parserWG.Add(1)
 		go func() {
 			defer parserWG.Done()
 			for line := range linesChan {
-				if req, err := pp.compiled.parseLine(line); err == nil {
+				if req, err := pp.compiled.parseLineWithPoolOpt(line, pp.pool, skipStrings); err == nil {
 					resultsChan <- req
 				}
 				// Return buffer to pool after processing
@@ -498,7 +491,7 @@ func (pp *ParallelParser) ParseLine(line []byte) (*ingestor.Request, error) {
 
 // ParseLineReuse for zero-allocation parsing with request reuse
 func (pp *ParallelParser) ParseLineReuse(line []byte, req *ingestor.Request) error {
-	return pp.compiled.parseLineReuse(line, req)
+	return pp.compiled.parseLineReuseOpt(line, req, pp.SkipStringFields)
 }
 
 // validateFormat ensures format string doesn't have duplicate non-skippable fields
@@ -644,19 +637,17 @@ func compileFormat(format string) (*CompiledFormat, error) {
 	}, nil
 }
 
-// parseLine uses zero-allocation, ultra-fast parsing
-func (cf *CompiledFormat) parseLine(line []byte) (*ingestor.Request, error) {
-	req := &ingestor.Request{}
-	cf.parseLineReuse(line, req)
-	return req, nil
-}
-
 // parseLineWithPool uses object pool to reduce allocations
 func (cf *CompiledFormat) parseLineWithPool(line []byte, pool *sync.Pool) (*ingestor.Request, error) {
+	return cf.parseLineWithPoolOpt(line, pool, false)
+}
+
+// parseLineWithPoolOpt uses object pool with optional string field skipping
+func (cf *CompiledFormat) parseLineWithPoolOpt(line []byte, pool *sync.Pool, skipStrings bool) (*ingestor.Request, error) {
 	req := pool.Get().(*ingestor.Request)
 	// Reset the request to zero state
 	*req = ingestor.Request{}
-	err := cf.parseLineReuse(line, req)
+	err := cf.parseLineReuseOpt(line, req, skipStrings)
 	if err != nil {
 		// Return request to pool on parse error to prevent memory leak
 		pool.Put(req)
@@ -665,19 +656,19 @@ func (cf *CompiledFormat) parseLineWithPool(line []byte, pool *sync.Pool) (*inge
 	return req, nil
 }
 
-// parseLineReuse parses a log line into an existing Request struct to avoid allocations
-func (cf *CompiledFormat) parseLineReuse(line []byte, req *ingestor.Request) error {
+// parseLineReuseOpt parses a log line with optional string field skipping
+func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *ingestor.Request, skipStrings bool) error {
 	// Use compiled format extractors for optimized parsing
 	if len(cf.extractors) > 0 {
-		return cf.parseUsingCompiledFormat(line, req)
+		return cf.parseUsingCompiledFormatOpt(line, req, skipStrings)
 	}
 
 	// If no extractors configured, skip parsing
 	return nil
 }
 
-// parseUsingCompiledFormat applies the compiled extractors to parse a log line into a Request
-func (cf *CompiledFormat) parseUsingCompiledFormat(line []byte, req *ingestor.Request) error {
+// parseUsingCompiledFormatOpt applies extractors with optional string field skipping
+func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor.Request, skipStrings bool) error {
 	pos := 0
 
 	for _, extractor := range cf.extractors {
@@ -723,8 +714,8 @@ func (cf *CompiledFormat) parseUsingCompiledFormat(line []byte, req *ingestor.Re
 			fieldData := line[start:pos]
 
 			switch extractor.FieldType {
-			case 0: // IP
-				req.IP = parseIPv4UltraFast(line, start, pos)
+			case 0: // IP - parse directly to uint32 (no net.IP allocation)
+				req.IPUint32 = parseIPv4ToUint32(line, start, pos)
 			case 1: // Timestamp
 				req.Timestamp = parseTimestampUltraFast(line, start)
 			case 2: // Method (standalone)
@@ -742,24 +733,27 @@ func (cf *CompiledFormat) parseUsingCompiledFormat(line []byte, req *ingestor.Re
 						req.Method = parseMethodUltraFast(line, start, methodEnd)
 					}
 
-					// Skip spaces after method
-					uriStart := methodEnd
-					for uriStart < pos && line[uriStart] == ' ' {
-						uriStart++
-					}
+					// Extract URI only if strings are needed
+					if !skipStrings {
+						// Skip spaces after method
+						uriStart := methodEnd
+						for uriStart < pos && line[uriStart] == ' ' {
+							uriStart++
+						}
 
-					// Find end of URI (next space before HTTP version)
-					uriEnd := uriStart
-					for uriEnd < pos && line[uriEnd] != ' ' {
-						uriEnd++
-					}
+						// Find end of URI (next space before HTTP version)
+						uriEnd := uriStart
+						for uriEnd < pos && line[uriEnd] != ' ' {
+							uriEnd++
+						}
 
-					// Extract URI
-					if uriEnd > uriStart {
-						req.URI = bytesToString(line[uriStart:uriEnd])
+						// Extract URI
+						if uriEnd > uriStart {
+							req.URI = bytesToString(line[uriStart:uriEnd])
+						}
 					}
 					// HTTP version is intentionally ignored as Request struct has no field for it
-				} else {
+				} else if !skipStrings {
 					// If not quoted, treat entire field as URI
 					req.URI = bytesToString(fieldData)
 				}
@@ -772,9 +766,13 @@ func (cf *CompiledFormat) parseUsingCompiledFormat(line []byte, req *ingestor.Re
 					req.Bytes = parseBytesUltraFast(line, start, pos)
 				}
 			case 6: // User agent
-				req.UserAgent = bytesToString(fieldData)
+				if !skipStrings {
+					req.UserAgent = bytesToString(fieldData)
+				}
 			case 7: // URI (standalone)
-				req.URI = bytesToString(fieldData)
+				if !skipStrings {
+					req.URI = bytesToString(fieldData)
+				}
 			}
 		}
 
@@ -797,50 +795,50 @@ func bytesToString(b []byte) string {
 	return string(b)
 }
 
-// parseIPv4UltraFast extracts IPv4 address from log line using optimized bit operations
+// parseIPv4ToUint32 extracts IPv4 address directly as uint32 — zero allocation
 //
 // Performance optimizations:
 //   - Single-pass parsing with dot counting
 //   - Bit masking for digit extraction: (b & 0x0F) converts ASCII digit to int
-//   - Direct validation during parsing (avoids re-parsing)
+//   - Returns uint32 directly — NO net.IP heap allocation
 //   - Bounds checking for IPv4 format (7-15 characters)
 //
 // Input: line[start:end] should contain IPv4 like "192.168.1.1"
-// Returns: net.IP or nil if invalid format
-func parseIPv4UltraFast(line []byte, start, end int) net.IP {
+// Returns: uint32 IP or 0 if invalid format
+func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 	if end-start < 7 || end-start > 15 {
-		return nil
+		return 0
 	}
 
 	// Count dots and parse in one pass with bit masking
 	dots := 0
-	parts := [4]uint8{}
 	partIdx := 0
 	current := 0
+	var result uint32
 
 	for i := start; i < end; i++ {
 		b := line[i]
 		if b == '.' {
 			if current > 255 || partIdx >= 3 {
-				return nil
+				return 0
 			}
-			parts[partIdx] = uint8(current)
+			result |= uint32(current) << (24 - 8*partIdx)
 			partIdx++
 			current = 0
 			dots++
 		} else if b >= '0' && b <= '9' {
-			current = current*10 + int(b&0x0F) // Use bit masking for digit extraction
+			current = current*10 + int(b&0x0F)
 		} else {
-			return nil
+			return 0
 		}
 	}
 
 	if dots != 3 || current > 255 || partIdx != 3 {
-		return nil
+		return 0
 	}
-	parts[3] = uint8(current)
+	result |= uint32(current)
 
-	return net.IPv4(parts[0], parts[1], parts[2], parts[3])
+	return result
 }
 
 // parseTimestampUltraFast extracts timestamp from Apache Common Log format with maximum performance

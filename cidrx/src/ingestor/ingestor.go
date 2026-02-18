@@ -47,13 +47,26 @@ func ParseMethod(m string) HTTPMethod {
 }
 
 type Request struct {
-	Timestamp time.Time // Use native time
-	IP        net.IP    // Avoid string parsing multiple times
+	Timestamp time.Time  // Use native time
+	IP        net.IP     // Avoid string parsing multiple times (legacy, may be nil)
 	URI       string
 	UserAgent string
+	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser
 	Method    HTTPMethod
-	Status    uint16 // Smaller type for status code
+	Status    uint16     // Smaller type for status code
 	Bytes     uint32
+}
+
+// GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil.
+// Use this for non-hot-path code that needs net.IP.
+func (r *Request) GetIPNet() net.IP {
+	if r.IP != nil {
+		return r.IP
+	}
+	if r.IPUint32 == 0 {
+		return nil
+	}
+	return net.IPv4(byte(r.IPUint32>>24), byte(r.IPUint32>>16), byte(r.IPUint32>>8), byte(r.IPUint32))
 }
 
 // --- TCP Ingestor using go-lumber v2 ---

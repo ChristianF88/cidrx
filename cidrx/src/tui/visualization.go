@@ -218,7 +218,7 @@ func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
 
 	// Count traffic by /16 ranges (first.second octets)
 	for _, req := range filteredRequests {
-		ip := req.IP.To4()
+		ip := req.GetIPNet().To4()
 		if ip == nil {
 			continue
 		}

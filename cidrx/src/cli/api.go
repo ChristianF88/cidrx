@@ -401,7 +401,7 @@ func executeLiveAnalysis(cfg *config.Config) {
 			// Filter batch based on this window's regex filters
 			timedIps := make([]sliding.TimedIp, 0, len(batch))
 			for _, msg := range batch {
-				if msg.Timestamp.IsZero() || msg.IP == nil {
+				if msg.Timestamp.IsZero() || msg.IPUint32 == 0 {
 					continue
 				}
 
@@ -411,7 +411,7 @@ func executeLiveAnalysis(cfg *config.Config) {
 				}
 
 				timedIps = append(timedIps, sliding.TimedIp{
-					Ip:               msg.IP,
+					Ip:               msg.GetIPNet(),
 					Time:             msg.Timestamp,
 					EndpointAllowed:  true,
 					UserAgentAllowed: true,

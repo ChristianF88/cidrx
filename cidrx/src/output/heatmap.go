@@ -18,7 +18,7 @@ func PlotHeatmap(requests []ingestor.Request, filename string) {
 
 	// Fast bucketing into A.B.0.0/16
 	for _, req := range requests {
-		ip := req.IP.To4()
+		ip := req.GetIPNet().To4()
 		if ip == nil {
 			continue
 		}

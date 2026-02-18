@@ -56,6 +56,22 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 		return jsonOutput, nil, err
 	}
 
+	// Check if any trie config requires string fields (URI/UserAgent)
+	// If none do, skip string allocations for faster parsing
+	needsStringFields := false
+	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
+	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
+	for _, tc := range cfg.StaticTries {
+		if tc == nil {
+			continue
+		}
+		if hasGlobalUAFilters || tc.UserAgentRegex != "" || tc.EndpointRegex != "" {
+			needsStringFields = true
+			break
+		}
+	}
+	parser.SkipStringFields = !needsStringFields
+
 	parseStart := time.Now()
 	requests, err := parser.ParseFileParallelChunked(cfg.Static.LogFile)
 	parseDuration := time.Since(parseStart)
@@ -240,7 +256,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 
 	// Filter requests and collect IPs for batch insertion
 	filteredRequests := make([]ingestor.Request, 0, len(requests))
-	ipsToInsert := make([]net.IP, 0, len(requests))
+	var ipsToInsertUint32 []uint32
 
 	// User-Agent tracking
 	userAgentWhitelistIPs := make([]string, 0)
@@ -262,28 +278,20 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 
 	// Fast path for unfiltered data: use sorted insertion optimization
 	if !hasFilters {
-		// Convert all IPs to uint32 for sorting and counting, filtering out invalid IPs
+		// Use IPUint32 directly — no conversion needed (parsed directly to uint32)
 		ipUints := make([]uint32, 0, len(requests))
 		for _, r := range requests {
-			// Skip nil IPs (failed to parse)
-			if r.IP == nil {
+			// Skip 0 IPs (invalid or failed to parse)
+			if r.IPUint32 == 0 {
 				invalidIPCount++
 				continue
 			}
-			ipUint := iputils.IPToUint32(r.IP)
-			// Skip 0.0.0.0 (invalid or failed conversion)
-			if ipUint == 0 {
-				invalidIPCount++
-				continue
-			}
-			ipUints = append(ipUints, ipUint)
+			ipUints = append(ipUints, r.IPUint32)
 			filteredRequests = append(filteredRequests, r)
 		}
 
-		// Sort for optimal cache locality and count identical IPs
-		sort.Slice(ipUints, func(i, j int) bool {
-			return ipUints[i] < ipUints[j]
-		})
+		// Radix sort: O(n) vs sort.Slice O(n log n) — 10-15x faster for large arrays
+		iputils.RadixSortUint32(ipUints)
 
 		// Use optimized sorted insertion
 		trieInstance.BatchInsertSortedUint32(ipUints)
@@ -298,7 +306,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
-				&filteredRequests, &ipsToInsert, &invalidIPCount)
+				&filteredRequests, &ipsToInsertUint32, &invalidIPCount)
 			if err != nil {
 				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("failed to process requests concurrently: %v", err), 1)
 			}
@@ -309,12 +317,13 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
-				&filteredRequests, &ipsToInsert, &invalidIPCount)
+				&filteredRequests, &ipsToInsertUint32, &invalidIPCount)
 		}
 
-		// Parallel batch insertion of all IPs (only for filtered data)
-		if len(ipsToInsert) > 0 {
-			trieInstance.BatchParallelInsert(ipsToInsert, runtime.NumCPU())
+		// Radix sort + batch sorted insert — same optimization as unfiltered fast path
+		if len(ipsToInsertUint32) > 0 {
+			iputils.RadixSortUint32(ipsToInsertUint32)
+			trieInstance.BatchInsertSortedUint32(ipsToInsertUint32)
 		}
 	}
 
@@ -386,7 +395,7 @@ func processRequestsConcurrentlyParallel(
 	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
 	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
 	filteredRequests *[]ingestor.Request,
-	ipsToInsert *[]net.IP,
+	ipsToInsert *[]uint32,
 	invalidIPCount *int) error {
 
 	// Determine optimal worker count for filtering
@@ -435,24 +444,19 @@ func processRequestsConcurrentlyParallel(
 		defer collectorWG.Done()
 		for result := range resultChan {
 			if result.shouldInclude {
-				// Skip nil IPs (failed to parse)
-				if result.request.IP == nil {
-					localInvalidCount++
-					continue
-				}
-				// Skip 0.0.0.0 (invalid or failed conversion)
-				if iputils.IPToUint32(result.request.IP) == 0 {
+				// Skip 0 IPs (invalid or failed to parse)
+				if result.request.IPUint32 == 0 {
 					localInvalidCount++
 					continue
 				}
 				*filteredRequests = append(*filteredRequests, result.request)
-				*ipsToInsert = append(*ipsToInsert, result.request.IP)
+				*ipsToInsert = append(*ipsToInsert, result.request.IPUint32)
 			}
 
 			// Collect User-Agent whitelist IPs (only if IP is valid)
-			if result.isWhitelistedUA && result.request.IP != nil {
+			if result.isWhitelistedUA && result.request.IPUint32 != 0 {
 				whitelistMutex.Lock()
-				ipStr := result.request.IP.String()
+				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
 				if !userAgentWhitelistIPSet[ipStr] {
 					userAgentWhitelistIPSet[ipStr] = true
 					*userAgentWhitelistIPs = append(*userAgentWhitelistIPs, ipStr)
@@ -461,9 +465,9 @@ func processRequestsConcurrentlyParallel(
 			}
 
 			// Collect User-Agent blacklist IPs (only if IP is valid)
-			if result.isBlacklistedUA && result.request.IP != nil {
+			if result.isBlacklistedUA && result.request.IPUint32 != 0 {
 				blacklistMutex.Lock()
-				ipStr := result.request.IP.String()
+				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
 				if !userAgentBlacklistIPSet[ipStr] {
 					userAgentBlacklistIPSet[ipStr] = true
 					*userAgentBlacklistIPs = append(*userAgentBlacklistIPs, ipStr)
@@ -517,7 +521,7 @@ func processRequestsSequentiallyParallel(
 	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
 	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
 	filteredRequests *[]ingestor.Request,
-	ipsToInsert *[]net.IP,
+	ipsToInsert *[]uint32,
 	invalidIPCount *int) {
 
 	// Single pass through requests with optimized filtering
@@ -535,14 +539,8 @@ func processRequestsSequentiallyParallel(
 			continue
 		}
 
-		// Skip nil IPs (failed to parse)
-		if r.IP == nil {
-			*invalidIPCount++
-			continue
-		}
-
-		// Skip 0.0.0.0 (invalid or failed conversion)
-		if iputils.IPToUint32(r.IP) == 0 {
+		// Skip 0 IPs (invalid or failed to parse)
+		if r.IPUint32 == 0 {
 			*invalidIPCount++
 			continue
 		}
@@ -561,7 +559,7 @@ func processRequestsSequentiallyParallel(
 
 			if isWhitelistedUA {
 				if !ipStrComputed {
-					ipStr = r.IP.String()
+					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
 					ipStrComputed = true
 				}
 				if !userAgentWhitelistIPSet[ipStr] {
@@ -572,7 +570,7 @@ func processRequestsSequentiallyParallel(
 
 			if isBlacklistedUA {
 				if !ipStrComputed {
-					ipStr = r.IP.String()
+					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
 					ipStrComputed = true
 				}
 				if !userAgentBlacklistIPSet[ipStr] {
@@ -585,7 +583,7 @@ func processRequestsSequentiallyParallel(
 		// Include in trie if not whitelisted by User-Agent
 		if !isWhitelistedUA {
 			*filteredRequests = append(*filteredRequests, r)
-			*ipsToInsert = append(*ipsToInsert, r.IP)
+			*ipsToInsert = append(*ipsToInsert, r.IPUint32)
 		}
 	}
 }

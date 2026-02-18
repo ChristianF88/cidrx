@@ -143,7 +143,7 @@ func (ftc *FastTrieCache) preProcessTrafficData(trieIndex int, requests []ingest
 
 	// Build traffic matrix
 	for _, req := range filteredRequests {
-		ip := req.IP.To4()
+		ip := req.GetIPNet().To4()
 		if ip == nil {
 			continue
 		}

@@ -37,19 +37,16 @@ func filterWorker(
 				request: r,
 			}
 
-			// Apply time filtering
+			// Apply time filtering — skip rejected requests entirely (no channel send)
 			if !startTime.IsZero() && r.Timestamp.Before(startTime) {
-				resultChan <- result
 				continue
 			}
 			if !endTime.IsZero() && r.Timestamp.After(endTime) {
-				resultChan <- result
 				continue
 			}
 
 			// Apply regex filtering (this is expensive and benefits from concurrency)
 			if !trieConfig.ShouldIncludeRequest(r) {
-				resultChan <- result
 				continue
 			}
 

@@ -58,6 +58,22 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 		return jsonOutput, nil, err
 	}
 
+	// Check if any trie config requires string fields (URI/UserAgent)
+	// If none do, skip string allocations for ~2x fewer allocs per line
+	needsStringFields := false
+	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
+	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
+	for _, tc := range cfg.StaticTries {
+		if tc == nil {
+			continue
+		}
+		if hasGlobalUAFilters || tc.UserAgentRegex != "" || tc.EndpointRegex != "" {
+			needsStringFields = true
+			break
+		}
+	}
+	parser.SkipStringFields = !needsStringFields
+
 	parseStart := time.Now()
 	requests, err := parser.ParseFileParallelChunked(cfg.Static.LogFile)
 	parseDuration := time.Since(parseStart)
@@ -193,16 +209,14 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 			// No filtering needed: all requests pass through
 			filteredRequests = requests
 
-			// Convert all IPs to uint32 for sorting and counting
+			// Use IPUint32 directly — no conversion needed (parsed directly to uint32)
 			ipUints := make([]uint32, len(requests))
-			for i, r := range requests {
-				ipUints[i] = iputils.IPToUint32(r.IP)
+			for i := range requests {
+				ipUints[i] = requests[i].IPUint32
 			}
 
-			// Sort for optimal cache locality and count identical IPs
-			sort.Slice(ipUints, func(i, j int) bool {
-				return ipUints[i] < ipUints[j]
-			})
+			// Radix sort: O(n) vs sort.Slice O(n log n) — 10-15x faster for large arrays
+			iputils.RadixSortUint32(ipUints)
 
 			// Use optimized sorted insertion
 			trieInstance.BatchInsertSortedUint32(ipUints)
@@ -540,17 +554,17 @@ func processRequestsConcurrently(
 	collectorWG.Add(1)
 	go func() {
 		defer collectorWG.Done()
-		var ipsToInsert []net.IP
+		var ipUintsToInsert []uint32
 		for result := range resultChan {
 			if result.shouldInclude {
 				*filteredRequests = append(*filteredRequests, result.request)
-				ipsToInsert = append(ipsToInsert, result.request.IP)
+				ipUintsToInsert = append(ipUintsToInsert, result.request.IPUint32)
 			}
 
 			// Collect User-Agent whitelist IPs
 			if result.isWhitelistedUA {
 				whitelistMutex.Lock()
-				ipStr := result.request.IP.String()
+				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
 				if !userAgentWhitelistIPSet[ipStr] {
 					userAgentWhitelistIPSet[ipStr] = true
 					*userAgentWhitelistIPs = append(*userAgentWhitelistIPs, ipStr)
@@ -562,7 +576,7 @@ func processRequestsConcurrently(
 			// Collect User-Agent blacklist IPs
 			if result.isBlacklistedUA {
 				blacklistMutex.Lock()
-				ipStr := result.request.IP.String()
+				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
 				if !userAgentBlacklistIPSet[ipStr] {
 					userAgentBlacklistIPSet[ipStr] = true
 					*userAgentBlacklistIPs = append(*userAgentBlacklistIPs, ipStr)
@@ -573,20 +587,12 @@ func processRequestsConcurrently(
 		}
 
 		// Batch insert all collected IPs using sorted insertion
-		if len(ipsToInsert) > 0 {
-			// Convert to uint32 for sorting
-			ipUints := make([]uint32, len(ipsToInsert))
-			for i, ip := range ipsToInsert {
-				ipUints[i] = iputils.IPToUint32(ip)
-			}
-
-			// Sort for better cache locality
-			sort.Slice(ipUints, func(i, j int) bool {
-				return ipUints[i] < ipUints[j]
-			})
+		if len(ipUintsToInsert) > 0 {
+			// Radix sort: O(n) vs sort.Slice O(n log n) — 10-15x faster for large arrays
+			iputils.RadixSortUint32(ipUintsToInsert)
 
 			// Use optimized sorted insertion
-			trieInstance.BatchInsertSortedUint32(ipUints)
+			trieInstance.BatchInsertSortedUint32(ipUintsToInsert)
 		}
 	}()
 
@@ -624,7 +630,8 @@ func processRequestsConcurrently(
 }
 
 
-// processRequestsSequentially provides optimized sequential processing for simple filtering cases
+// processRequestsSequentially provides optimized sequential processing for simple filtering cases.
+// Collects filtered IPs, then radix-sorts and batch-inserts for the same speed as the unfiltered fast path.
 func processRequestsSequentially(
 	requests []ingestor.Request,
 	trieConfig *config.TrieConfig,
@@ -635,6 +642,9 @@ func processRequestsSequentially(
 	globalUserAgentWhitelistIPSet, globalUserAgentBlacklistIPSet map[string]bool,
 	trieInstance *trie.Trie,
 	filteredRequests *[]ingestor.Request) {
+
+	// Collect filtered IPs for deferred batch insert
+	ipUints := make([]uint32, 0, len(requests)/2)
 
 	// Single pass through requests with optimized filtering
 	for _, r := range requests {
@@ -665,7 +675,7 @@ func processRequestsSequentially(
 
 			if isWhitelistedUA {
 				if !ipStrComputed {
-					ipStr = r.IP.String()
+					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
 					ipStrComputed = true
 				}
 				if !userAgentWhitelistIPSet[ipStr] {
@@ -677,7 +687,7 @@ func processRequestsSequentially(
 
 			if isBlacklistedUA {
 				if !ipStrComputed {
-					ipStr = r.IP.String()
+					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
 					ipStrComputed = true
 				}
 				if !userAgentBlacklistIPSet[ipStr] {
@@ -688,10 +698,16 @@ func processRequestsSequentially(
 			}
 		}
 
-		// Include in trie if not whitelisted by User-Agent
+		// Collect for batch insert if not whitelisted by User-Agent
 		if !isWhitelistedUA {
 			*filteredRequests = append(*filteredRequests, r)
-			trieInstance.Insert(r.IP)
+			ipUints = append(ipUints, r.IPUint32)
 		}
+	}
+
+	// Radix sort + batch sorted insert — same optimization as unfiltered fast path
+	if len(ipUints) > 0 {
+		iputils.RadixSortUint32(ipUints)
+		trieInstance.BatchInsertSortedUint32(ipUints)
 	}
 }

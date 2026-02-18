@@ -72,6 +72,10 @@
   target = "assets"
 
 [[mounts]]
+  # Exclude flexsearch.js so the local override in assets/js/ is used instead.
+  # The theme uses site.LanguagePrefix which is empty for single-language sites,
+  # breaking the search index fetch URL on subpath-hosted sites.
+  excludeFiles = "js/flexsearch.js"
   source = "node_modules/@thulite/doks-core/assets"
   target = "assets"
 

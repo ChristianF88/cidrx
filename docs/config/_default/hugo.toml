@@ -1,7 +1,7 @@
 title = "cidrx Overview"
 baseurl = "https://christianf88.github.io/cidrx/"
 relativeURLs = false
-canonifyURLs = true
+canonifyURLs = false
 disableAliases = true
 disableHugoGeneratorInject = true
 # disableKinds = ["taxonomy", "term"]

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ChristianF88/cidrx/config"
@@ -30,24 +32,30 @@ type App struct {
 	focusableItems []tview.Primitive
 	currentFocus   int
 
-	logFile          string
-	clusterArgSets   []string
-	rangesCidr       []string
-	plotPath         string
-	analysisComplete bool
-	jsonResult       *output.JSONOutput
-	requests         []ingestor.Request
+	logFile        string
+	clusterArgSets []string
+	rangesCidr     []string
+	plotPath       string
 
-	// Multi-trie support
-	cfg             *config.Config
-	configPath      string
+	// Shared mutable state protected by mu (accessed from background goroutines)
+	mu              sync.Mutex
+	jsonResult      *output.JSONOutput
+	requests        []ingestor.Request
 	currentTrie     int
 	multiTrieResult *output.JSONOutput // Store the full multi-trie result
+
+	// Atomic flags for cross-goroutine signaling (no mutex needed)
+	analysisComplete atomic.Bool
+	switchingTrie    atomic.Bool
+	requestsReady    chan struct{} // closed when requests are available
+
+	// Multi-trie support (immutable after construction)
+	cfg        *config.Config
+	configPath string
 
 	// Performance optimization components
 	visualizationCache *VisualizationCache // Pre-computed visualization data
 	fastCache          *FastTrieCache      // RAM-based cache for instant trie switching
-	switchingTrie      bool                // Flag to prevent concurrent switching
 
 	// UI caching for performance
 	cachedSummaryTexts    map[int]string // Cache summary text per trie
@@ -106,13 +114,14 @@ func NewApp(logFile string, clusterArgSets []string, rangesCidr []string, plotPa
 // NewAppFromConfig creates a new TUI application from config file
 func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 	app := &App{
-		app:         tview.NewApplication(),
-		pages:       tview.NewPages(),
-		cfg:         cfg,
-		configPath:  configPath,
-		logFile:     cfg.Static.LogFile,
-		plotPath:    cfg.Static.PlotPath,
-		currentTrie: 0,
+		app:           tview.NewApplication(),
+		pages:         tview.NewPages(),
+		cfg:           cfg,
+		configPath:    configPath,
+		logFile:       cfg.Static.LogFile,
+		plotPath:      cfg.Static.PlotPath,
+		currentTrie:   0,
+		requestsReady: make(chan struct{}),
 		// Initialize cache maps (legacy)
 		cachedSummaryTexts:    make(map[int]string),
 		cachedClusteringTexts: make(map[int]string),
@@ -134,33 +143,27 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 		return
 	}
 
-	// Store the complete analysis results
+	// Store the complete analysis results under lock
+	a.mu.Lock()
 	a.multiTrieResult = multiResult
 
 	// Convert first trie to legacy format for initial display
 	if len(multiResult.Tries) > 0 {
-		// Debug: Check state before conversion
-		if a.multiTrieResult == nil {
-			a.ShowError("BUG: multiTrieResult is nil after assignment")
-			return
-		}
-		if len(a.multiTrieResult.Tries) == 0 {
-			a.ShowError("BUG: multiTrieResult.Tries is empty after assignment")
-			return
-		}
-
 		a.jsonResult = a.convertTrieToLegacy(0)
 		if a.jsonResult == nil {
-			a.ShowError(fmt.Sprintf("Failed to convert trie 0 to legacy format. Tries available: %d", len(a.multiTrieResult.Tries)))
+			a.mu.Unlock()
+			a.ShowError(fmt.Sprintf("Failed to convert trie 0 to legacy format. Tries available: %d", len(multiResult.Tries)))
 			return
 		}
 	} else {
+		a.mu.Unlock()
 		a.ShowError("Analysis completed but no tries found in results")
 		return
 	}
+	a.mu.Unlock()
 
-	// Mark analysis as complete
-	a.analysisComplete = true
+	// Mark analysis as complete (atomic, no lock needed)
+	a.analysisComplete.Store(true)
 
 	// Update UI to show results immediately
 	a.app.QueueUpdateDraw(func() {
@@ -190,9 +193,7 @@ func (a *App) ShowError(message string) {
 // preInitializeVisualization creates and prepares the visualization view in background
 func (a *App) preInitializeVisualization() {
 	// Wait for requests to be available (SetRequestData to be called)
-	for len(a.requests) == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	<-a.requestsReady
 
 	// Create visualization view if it doesn't exist
 	if a.visualizationView == nil {
@@ -218,7 +219,12 @@ func (a *App) preInitializeVisualization() {
 
 // SetRequestData sets the real request data for visualization and pre-caches all tries
 func (a *App) SetRequestData(requests []ingestor.Request) {
+	a.mu.Lock()
 	a.requests = requests
+	a.mu.Unlock()
+
+	// Signal that requests are available
+	close(a.requestsReady)
 
 	// Now that we have both analysis results and raw requests,
 	// we can efficiently cache everything for instant trie switching
@@ -278,7 +284,7 @@ func (a *App) setupUI() {
 			a.app.Stop()
 			return nil
 		case 'r', 'R':
-			if a.analysisComplete {
+			if a.analysisComplete.Load() {
 				a.pages.SwitchToPage("results")
 				a.updateStatusBar()
 			}
@@ -288,12 +294,12 @@ func (a *App) setupUI() {
 			a.statusBar.SetText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
 			return nil
 		case 'v', 'V':
-			if a.analysisComplete {
+			if a.analysisComplete.Load() {
 				a.showVisualization()
 			}
 			return nil
 		case 't', 'T':
-			if a.analysisComplete && a.cfg != nil && a.multiTrieResult != nil {
+			if a.analysisComplete.Load() && a.cfg != nil && a.multiTrieResult != nil {
 				// Check if we have multiple tries stored
 				if len(a.multiTrieResult.Tries) > 1 {
 					a.nextTrie()
@@ -304,7 +310,7 @@ func (a *App) setupUI() {
 
 		// Handle navigation in results view
 		frontPageName, _ := a.pages.GetFrontPage()
-		if a.analysisComplete && frontPageName == "results" {
+		if a.analysisComplete.Load() && frontPageName == "results" {
 			switch event.Key() {
 			case tcell.KeyTab:
 				a.nextFocus()
@@ -354,7 +360,7 @@ func (a *App) setupUI() {
 		}
 
 		// Handle navigation in visualization view
-		if a.analysisComplete && frontPageName == "visualization" {
+		if a.analysisComplete.Load() && frontPageName == "visualization" {
 			switch event.Key() {
 			case tcell.KeyLeft:
 				if a.visualizationView != nil {
@@ -467,7 +473,7 @@ func (a *App) animateProgress() {
 	stageIndex := 0
 	dots := 0
 
-	for !a.analysisComplete {
+	for !a.analysisComplete.Load() {
 		stage := stages[stageIndex%len(stages)]
 		dotStr := strings.Repeat(".", dots%4)
 
@@ -511,25 +517,26 @@ func (a *App) animateProgress() {
 
 // nextTrie cycles to the next trie in config mode (async optimized)
 func (a *App) nextTrie() {
-	if a.cfg != nil && a.multiTrieResult != nil && len(a.multiTrieResult.Tries) > 1 {
-		// Prevent concurrent switching
-		if a.switchingTrie {
+	a.mu.Lock()
+	canSwitch := a.cfg != nil && a.multiTrieResult != nil && len(a.multiTrieResult.Tries) > 1
+	var newTrieIndex int
+	if canSwitch {
+		newTrieIndex = (a.currentTrie + 1) % len(a.multiTrieResult.Tries)
+	}
+	a.mu.Unlock()
+
+	if canSwitch {
+		// Prevent concurrent switching (atomic CAS)
+		if !a.switchingTrie.CompareAndSwap(false, true) {
 			return
 		}
-		a.switchingTrie = true
-
-		newTrieIndex := (a.currentTrie + 1) % len(a.multiTrieResult.Tries)
-
-		// Try to use pre-processed data first
 		go a.switchTrieAsync(newTrieIndex)
 	}
 }
 
 // switchTrieAsync performs instant trie switching using fast RAM cache
 func (a *App) switchTrieAsync(newTrieIndex int) {
-	defer func() {
-		a.switchingTrie = false
-	}()
+	defer a.switchingTrie.Store(false)
 
 	// Try fast cache first for instant switching
 	if a.fastCache != nil {
@@ -996,7 +1003,7 @@ func (a *App) updateFocusBorders() {
 }
 
 func (a *App) updateStatusBar() {
-	if !a.analysisComplete {
+	if !a.analysisComplete.Load() {
 		a.statusBar.SetText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
 		return
 	}

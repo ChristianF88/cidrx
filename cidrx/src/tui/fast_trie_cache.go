@@ -2,6 +2,7 @@ package tui
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ChristianF88/cidrx/ingestor"
@@ -30,9 +31,9 @@ type FastTrieCache struct {
 	cacheComplete bool
 	lastUpdated   time.Time
 
-	// Performance metrics
-	cacheHits   int64
-	cacheMisses int64
+	// Performance metrics (atomic for concurrent access under RLock)
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
 }
 
 // NewFastTrieCache creates a new fast trie cache
@@ -108,29 +109,26 @@ func (ftc *FastTrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResul
 	return false
 }
 
-// preRenderTrieTexts pre-renders all text components for a trie
+// preRenderTrieTexts pre-renders all text components for a trie.
+// Must hold ftc.mu (write lock) on entry. Acquires app.mu to safely
+// swap jsonResult/currentTrie during rendering.
 func (ftc *FastTrieCache) preRenderTrieTexts(trieIndex int, legacyData *output.JSONOutput, app *App) {
-	// Temporarily set the app's state to render texts for this specific trie
+	app.mu.Lock()
 	originalResult := app.jsonResult
 	originalTrieIndex := app.currentTrie
 	app.jsonResult = legacyData
 	app.currentTrie = trieIndex
 
-	// Pre-render summary text
+	// Pre-render all text components while holding the lock
 	ftc.summaryTexts[trieIndex] = app.buildSummaryText()
-
-	// Pre-render clustering text
 	ftc.clusterTexts[trieIndex] = app.buildClusteringText()
-
-	// Pre-render CIDR analysis text
 	ftc.cidrTexts[trieIndex] = app.buildCidrAnalysisText()
-
-	// Pre-render diagnostics text
 	ftc.diagnosticTexts[trieIndex] = app.buildDiagnosticsText()
 
 	// Restore original state
 	app.jsonResult = originalResult
 	app.currentTrie = originalTrieIndex
+	app.mu.Unlock()
 }
 
 // preProcessTrafficData pre-processes traffic data for visualization
@@ -200,9 +198,9 @@ func (ftc *FastTrieCache) GetLegacyData(trieIndex int) (*output.JSONOutput, bool
 
 	data, exists := ftc.legacyData[trieIndex]
 	if exists {
-		ftc.cacheHits++
+		ftc.cacheHits.Add(1)
 	} else {
-		ftc.cacheMisses++
+		ftc.cacheMisses.Add(1)
 	}
 	return data, exists
 }
@@ -219,9 +217,9 @@ func (ftc *FastTrieCache) GetPreRenderedTexts(trieIndex int) (summary, clusterin
 
 	exists = summaryExists && clusteringExists && cidrExists && diagnosticsExists
 	if exists {
-		ftc.cacheHits++
+		ftc.cacheHits.Add(1)
 	} else {
-		ftc.cacheMisses++
+		ftc.cacheMisses.Add(1)
 	}
 
 	return summary, clustering, cidr, diagnostics, exists
@@ -237,9 +235,9 @@ func (ftc *FastTrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256
 
 	exists = matrixExists && maxExists
 	if exists {
-		ftc.cacheHits++
+		ftc.cacheHits.Add(1)
 	} else {
-		ftc.cacheMisses++
+		ftc.cacheMisses.Add(1)
 	}
 
 	return trafficMatrix, maxTraffic, exists
@@ -252,12 +250,12 @@ func (ftc *FastTrieCache) GetVisualizationRender(trieIndex, clusterSetIndex int)
 
 	if trieCache, trieExists := ftc.vizRenderCache[trieIndex]; trieExists {
 		if renderText, renderExists := trieCache[clusterSetIndex]; renderExists {
-			ftc.cacheHits++
+			ftc.cacheHits.Add(1)
 			return renderText, true
 		}
 	}
 
-	ftc.cacheMisses++
+	ftc.cacheMisses.Add(1)
 	return "", false
 }
 
@@ -275,8 +273,8 @@ func (ftc *FastTrieCache) GetCacheStats() (totalTries int, cacheComplete bool, h
 
 	totalTries = ftc.totalTries
 	cacheComplete = ftc.cacheComplete
-	hits = ftc.cacheHits
-	misses = ftc.cacheMisses
+	hits = ftc.cacheHits.Load()
+	misses = ftc.cacheMisses.Load()
 
 	if hits+misses > 0 {
 		hitRatio = float64(hits) / float64(hits+misses) * 100
@@ -301,6 +299,6 @@ func (ftc *FastTrieCache) Clear() {
 
 	ftc.totalTries = 0
 	ftc.cacheComplete = false
-	ftc.cacheHits = 0
-	ftc.cacheMisses = 0
+	ftc.cacheHits.Store(0)
+	ftc.cacheMisses.Store(0)
 }

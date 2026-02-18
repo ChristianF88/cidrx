@@ -897,8 +897,13 @@ func parseMethodUltraFast(line []byte, start, end int) ingestor.HTTPMethod {
 	case 'G':
 		return ingestor.GET
 	case 'P':
-		if end > start+1 && line[start+1] == 'O' {
-			return ingestor.POST
+		if end > start+1 {
+			switch line[start+1] {
+			case 'O':
+				return ingestor.POST
+			case 'A':
+				return ingestor.PATCH
+			}
 		}
 		return ingestor.PUT
 	case 'D':

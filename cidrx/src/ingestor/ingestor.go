@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	lj "github.com/elastic/go-lumber/lj"
@@ -80,6 +81,7 @@ type TCPIngestor struct {
 	readTimeout time.Duration // for server
 	events      chan *lj.Batch
 	server      *srv2.Server
+	closed      atomic.Bool
 }
 
 func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error) {
@@ -111,6 +113,7 @@ func (ing *TCPIngestor) Accept() error {
 			ing.events <- batch
 			batch.ACK()
 		}
+		ing.closed.Store(true)
 		close(ing.events)
 	}()
 
@@ -221,19 +224,7 @@ func (ing *TCPIngestor) IsClosed() bool {
 	if ing.server == nil {
 		return true
 	}
-	// Check if the server's receive channel is closed by checking events length
-	// A zero-length events channel after server init means the goroutine closed it
-	select {
-	case batch, ok := <-ing.events:
-		if !ok {
-			return true
-		}
-		// Put the batch back — avoid losing data
-		ing.events <- batch
-		return false
-	default:
-		return false
-	}
+	return ing.closed.Load()
 }
 
 // Close shuts down the server and listener.

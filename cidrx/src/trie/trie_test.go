@@ -1291,7 +1291,7 @@ func TestAnalyzeDuplicates(t *testing.T) {
 	var totalRequests int
 
 	for _, req := range requests {
-		ipUint := iputils.IPToUint32(req.IP)
+		ipUint := req.IPUint32
 		ipCounts[ipUint]++
 		totalRequests++
 	}

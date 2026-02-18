@@ -138,7 +138,7 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 
 		// Apply filtering and time range - use pooled slice
 		filteredRequests := pools.Pools.GetRequestSlice()
-		defer pools.Pools.ReturnRequestSlice(filteredRequests)
+		pooledFilteredRequests := true // track whether filteredRequests still points to a pooled slice
 		var startTime, endTime time.Time
 
 		if trieConfig.StartTime != nil {
@@ -157,9 +157,7 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 
 		// Extract IPs from User-Agent whitelist/blacklist for this trie's filtered requests - use pooled slices
 		userAgentWhitelistIPs := pools.Pools.GetStringSlice()
-		defer pools.Pools.ReturnStringSlice(userAgentWhitelistIPs)
 		userAgentBlacklistIPs := pools.Pools.GetStringSlice()
-		defer pools.Pools.ReturnStringSlice(userAgentBlacklistIPs)
 
 		// Set up trie result
 		trieResult := output.TrieResult{
@@ -196,9 +194,7 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 
 		// Concurrent filtering for maximum performance - use pooled maps
 		userAgentWhitelistIPSet := pools.Pools.GetStringMap()
-		defer pools.Pools.ReturnStringMap(userAgentWhitelistIPSet)
 		userAgentBlacklistIPSet := pools.Pools.GetStringMap()
-		defer pools.Pools.ReturnStringMap(userAgentBlacklistIPSet)
 
 		// Check if we have any filters that require per-request processing
 		// Only consider User-Agent matcher a filter if it actually has patterns
@@ -213,6 +209,7 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 		if !hasFilters {
 			// No filtering needed: all requests pass through
 			filteredRequests = requests
+			pooledFilteredRequests = false // no longer a pooled slice
 
 			// Use IPUint32 directly — no conversion needed (parsed directly to uint32)
 			ipUints := make([]uint32, len(requests))
@@ -325,7 +322,6 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 
 				// Parse CIDRs once for reuse across operations - use pooled slice
 				cidrIPNets := pools.Pools.GetIPNetSlice()
-				defer pools.Pools.ReturnIPNetSlice(cidrIPNets)
 				totalUniqueIPs := float64(trieInstance.CountAll())
 
 				for _, cidrStr := range cidrs {
@@ -366,12 +362,22 @@ func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ing
 					})
 				}
 
+				pools.Pools.ReturnIPNetSlice(cidrIPNets)
 				trieResult.Data = append(trieResult.Data, clusterResult)
 			}
 		}
 
 		// Add this trie result to the output
 		jsonOutput.Tries = append(jsonOutput.Tries, trieResult)
+
+		// Return pooled objects at end of loop iteration (not defer, which only runs at function exit)
+		if pooledFilteredRequests {
+			pools.Pools.ReturnRequestSlice(filteredRequests)
+		}
+		pools.Pools.ReturnStringSlice(userAgentWhitelistIPs)
+		pools.Pools.ReturnStringSlice(userAgentBlacklistIPs)
+		pools.Pools.ReturnStringMap(userAgentWhitelistIPSet)
+		pools.Pools.ReturnStringMap(userAgentBlacklistIPSet)
 	}
 
 	// Calculate total clusters across all tries

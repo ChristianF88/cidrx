@@ -12,6 +12,10 @@ cidrx.toml
 cidrx-testing.toml
 CLAUDE.local.md
 
+# Output files
+cidrx_ban.txt
+cidrx_jail.json
+
 # Python
 .venv
 __pycache__/

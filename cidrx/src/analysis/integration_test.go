@@ -554,6 +554,60 @@ func intAbs(x int) int {
 	return x
 }
 
+// generateBenchmarkLogFileImpl creates a log file for benchmarks using the
+// same distribution as generateIntegrationLogFile but without *testing.T.
+func generateBenchmarkLogFileImpl(tmpDir string) string {
+	logFile := filepath.Join(tmpDir, "benchmark.log")
+	var b strings.Builder
+	b.Grow(totalEntryCount * 150)
+	entryIdx := 0
+
+	writeEntry := func(ip string) {
+		ua := uaForIndex(entryIdx)
+		ts := timestampForIndex(entryIdx)
+		endpoint := ua.endpoint
+		if strings.Contains(endpoint, "%d") {
+			endpoint = fmt.Sprintf(endpoint, entryIdx%100)
+		}
+		fmt.Fprintf(&b, "%s - - %s \"GET %s HTTP/1.1\" 200 1024 \"-\" \"%s\"\n",
+			ip, ts, endpoint, ua.ua)
+		entryIdx++
+	}
+
+	for i := 0; i < clusterACount; i++ {
+		v := i + 1
+		writeEntry(fmt.Sprintf("10.20.%d.%d", v/256, v%256))
+	}
+	for i := 0; i < clusterBCount; i++ {
+		v := i + 1
+		writeEntry(fmt.Sprintf("192.168.%d.%d", v/256, v%256))
+	}
+	for i := 0; i < clusterCCount; i++ {
+		v := i + 1
+		writeEntry(fmt.Sprintf("172.16.%d.%d", v/256, v%256))
+	}
+	for i := 0; i < cidrTest1Count; i++ {
+		v := i + 1
+		writeEntry(fmt.Sprintf("14.160.%d.%d", v/256, v%256))
+	}
+	for i := 0; i < cidrTest2Count; i++ {
+		v := i + 1
+		writeEntry(fmt.Sprintf("77.88.%d.%d", v/256, v%256))
+	}
+	for i := 0; i < noiseCount; i++ {
+		o1 := 40 + (i / 1000)
+		o2 := (i % 1000) / 4
+		o3 := (i % 4)
+		o4 := 1 + ((i * 7) % 254)
+		writeEntry(fmt.Sprintf("%d.%d.%d.%d", o1, o2, o3, o4))
+	}
+
+	if err := os.WriteFile(logFile, []byte(b.String()), 0644); err != nil {
+		panic(fmt.Sprintf("Failed to write benchmark log file: %v", err))
+	}
+	return logFile
+}
+
 // ============================================================================
 // Invalid Input Error Parity Tests
 // ============================================================================

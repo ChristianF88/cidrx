@@ -19,8 +19,8 @@ type NumericCIDR struct {
 // String converts NumericCIDR to string representation only when needed.
 // Uses manual byte building to avoid fmt.Sprintf allocation overhead.
 func (nc NumericCIDR) String() string {
-	// Max: "255.255.255.255/32" = 18 bytes
-	var buf [18]byte
+	// Max: "255.255.255.255/255" = 19 bytes (PrefixLen is uint8, can be > 99)
+	var buf [19]byte
 	pos := 0
 
 	pos = appendOctet(buf[:], pos, byte(nc.IP>>24))

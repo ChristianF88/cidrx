@@ -3,6 +3,7 @@ package logparser
 import (
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -971,6 +972,87 @@ func BenchmarkParallelParser_FileProcessing(b *testing.B) {
 			b.Fatal(err)
 		}
 		b.ReportMetric(float64(len(requests)), "requests")
+	}
+}
+
+func TestParser_ZeroByteFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	emptyFile := tmpDir + "/empty.log"
+
+	f, err := os.Create(emptyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	parser, err := NewParallelParser(apacheCombinedFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requests, err := parser.ParseFile(emptyFile)
+	if err != nil {
+		t.Fatalf("ParseFile on empty file should not error, got: %v", err)
+	}
+
+	if len(requests) != 0 {
+		t.Errorf("Expected 0 requests from empty file, got %d", len(requests))
+	}
+}
+
+func TestParser_SingleLine(t *testing.T) {
+	tmpDir := t.TempDir()
+	singleFile := tmpDir + "/single.log"
+
+	line := `198.51.10.21 - - [06/Jul/2025:19:57:26 +0000] "GET /dataset/?test HTTP/1.0" 200 13984 "-" "Mozilla/5.0" "14.191.169.89"` + "\n"
+
+	if err := os.WriteFile(singleFile, []byte(line), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	parser, err := NewParallelParser(apacheCombinedFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requests, err := parser.ParseFile(singleFile)
+	if err != nil {
+		t.Fatalf("ParseFile on single-line file should not error, got: %v", err)
+	}
+
+	if len(requests) != 1 {
+		t.Fatalf("Expected exactly 1 request, got %d", len(requests))
+	}
+
+	req := requests[0]
+
+	if req.IPUint32 != ipStringToUint32("14.191.169.89") {
+		t.Errorf("Expected IP 14.191.169.89, got %s", ingestor.Uint32ToIPString(req.IPUint32))
+	}
+
+	expectedTime := time.Date(2025, 7, 6, 19, 57, 26, 0, time.UTC)
+	if !req.Timestamp.Equal(expectedTime) {
+		t.Errorf("Expected timestamp %v, got %v", expectedTime, req.Timestamp)
+	}
+
+	if req.Method != ingestor.GET {
+		t.Errorf("Expected method GET, got %v", req.Method)
+	}
+
+	if req.URI != "/dataset/?test" {
+		t.Errorf("Expected URI /dataset/?test, got %s", req.URI)
+	}
+
+	if req.Status != 200 {
+		t.Errorf("Expected status 200, got %d", req.Status)
+	}
+
+	if req.Bytes != 13984 {
+		t.Errorf("Expected bytes 13984, got %d", req.Bytes)
+	}
+
+	if req.UserAgent != "Mozilla/5.0" {
+		t.Errorf("Expected user agent Mozilla/5.0, got %s", req.UserAgent)
 	}
 }
 

@@ -999,4 +999,177 @@ func TestParseClusterArgSetsFromStrings(t *testing.T) {
 			t.Error("expected error when minDepth > maxDepth")
 		}
 	})
+
+	t.Run("minDepth equals maxDepth succeeds", func(t *testing.T) {
+		sets, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "24", "0.1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("expected 1 set, got %d", len(sets))
+		}
+		if sets[0].MinDepth != 24 || sets[0].MaxDepth != 24 {
+			t.Errorf("expected min=max=24, got min=%d max=%d", sets[0].MinDepth, sets[0].MaxDepth)
+		}
+	})
+
+	t.Run("invalid minDepth fails", func(t *testing.T) {
+		_, err := ParseClusterArgSetsFromStrings([]string{"1000", "xyz", "32", "0.1"})
+		if err == nil {
+			t.Error("expected error for non-numeric minDepth")
+		}
+	})
+
+	t.Run("invalid maxDepth fails", func(t *testing.T) {
+		_, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "xyz", "0.1"})
+		if err == nil {
+			t.Error("expected error for non-numeric maxDepth")
+		}
+	})
+
+	t.Run("invalid meanSubnetDiff fails", func(t *testing.T) {
+		_, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "32", "notanumber"})
+		if err == nil {
+			t.Error("expected error for non-numeric meanSubnetDifference")
+		}
+	})
+}
+
+func TestConfig_WhitelistBlacklistPaths(t *testing.T) {
+	testConfigContent := `
+[global]
+whitelist = "/path/to/whitelist.txt"
+blacklist = "/path/to/blacklist.txt"
+userAgentWhitelist = "/path/to/ua_whitelist.txt"
+userAgentBlacklist = "/path/to/ua_blacklist.txt"
+`
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "wl_bl_config.toml")
+	if err := os.WriteFile(configPath, []byte(testConfigContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Global.Whitelist != "/path/to/whitelist.txt" {
+		t.Errorf("Expected Whitelist '/path/to/whitelist.txt', got %q", cfg.Global.Whitelist)
+	}
+	if cfg.Global.Blacklist != "/path/to/blacklist.txt" {
+		t.Errorf("Expected Blacklist '/path/to/blacklist.txt', got %q", cfg.Global.Blacklist)
+	}
+	if cfg.Global.UserAgentWhitelist != "/path/to/ua_whitelist.txt" {
+		t.Errorf("Expected UserAgentWhitelist '/path/to/ua_whitelist.txt', got %q", cfg.Global.UserAgentWhitelist)
+	}
+	if cfg.Global.UserAgentBlacklist != "/path/to/ua_blacklist.txt" {
+		t.Errorf("Expected UserAgentBlacklist '/path/to/ua_blacklist.txt', got %q", cfg.Global.UserAgentBlacklist)
+	}
+}
+
+func TestConfig_LoadWhitelistEmptyPaths(t *testing.T) {
+	cfg := &Config{Global: &GlobalConfig{}}
+
+	cidrs, err := cfg.LoadWhitelistCIDRs()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cidrs != nil {
+		t.Errorf("Expected nil, got %v", cidrs)
+	}
+
+	cidrs, err = cfg.LoadBlacklistCIDRs()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cidrs != nil {
+		t.Errorf("Expected nil, got %v", cidrs)
+	}
+
+	patterns, err := cfg.LoadUserAgentWhitelistPatterns()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if patterns != nil {
+		t.Errorf("Expected nil, got %v", patterns)
+	}
+
+	patterns, err = cfg.LoadUserAgentBlacklistPatterns()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if patterns != nil {
+		t.Errorf("Expected nil, got %v", patterns)
+	}
+}
+
+func TestConfig_LoadWhitelistNilGlobal(t *testing.T) {
+	cfg := &Config{Global: nil}
+
+	cidrs, err := cfg.LoadWhitelistCIDRs()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cidrs != nil {
+		t.Errorf("Expected nil, got %v", cidrs)
+	}
+
+	cidrs, err = cfg.LoadBlacklistCIDRs()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cidrs != nil {
+		t.Errorf("Expected nil, got %v", cidrs)
+	}
+}
+
+func TestConfig_LoadCIDRFileWithComments(t *testing.T) {
+	tmpDir := t.TempDir()
+	cidrFile := filepath.Join(tmpDir, "cidrs.txt")
+
+	content := "# Comment line\n\n192.168.1.0/24\n  # Another comment  \n10.0.0.0/8\n\n172.16.0.0/12\n"
+	if err := os.WriteFile(cidrFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Global: &GlobalConfig{Whitelist: cidrFile}}
+	cidrs, err := cfg.LoadWhitelistCIDRs()
+	if err != nil {
+		t.Fatalf("LoadWhitelistCIDRs failed: %v", err)
+	}
+
+	expected := []string{"192.168.1.0/24", "10.0.0.0/8", "172.16.0.0/12"}
+	if len(cidrs) != len(expected) {
+		t.Fatalf("Expected %d CIDRs, got %d", len(expected), len(cidrs))
+	}
+	for i, cidr := range cidrs {
+		if cidr != expected[i] {
+			t.Errorf("CIDR[%d] = %q, want %q", i, cidr, expected[i])
+		}
+	}
+}
+
+func TestConfig_LoadCIDRFileInvalidCIDR(t *testing.T) {
+	tmpDir := t.TempDir()
+	cidrFile := filepath.Join(tmpDir, "bad_cidrs.txt")
+
+	content := "192.168.1.0/24\nnot-a-cidr\n10.0.0.0/8\n"
+	if err := os.WriteFile(cidrFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Global: &GlobalConfig{Whitelist: cidrFile}}
+	_, err := cfg.LoadWhitelistCIDRs()
+	if err == nil {
+		t.Error("Expected error for invalid CIDR, got nil")
+	}
+}
+
+func TestConfig_LoadWhitelistNonexistentFile(t *testing.T) {
+	cfg := &Config{Global: &GlobalConfig{Whitelist: "/nonexistent/file.txt"}}
+	_, err := cfg.LoadWhitelistCIDRs()
+	if err == nil {
+		t.Error("Expected error for nonexistent file, got nil")
+	}
 }

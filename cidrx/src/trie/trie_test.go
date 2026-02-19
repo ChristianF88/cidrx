@@ -1326,3 +1326,62 @@ func TestAnalyzeDuplicates(t *testing.T) {
 	}
 	fmt.Printf("IPs appearing >10 times: %d\n", highDuplicates)
 }
+
+func TestTrie_AllSameIP(t *testing.T) {
+	trie := NewTrie()
+	ip := net.ParseIP("192.168.1.1")
+	if ip == nil {
+		t.Fatal("Failed to parse IP")
+	}
+
+	for i := 0; i < 10000; i++ {
+		trie.Insert(ip)
+	}
+
+	count := trie.Count(ip)
+	if count != 10000 {
+		t.Errorf("Expected Count to be 10000, got %d", count)
+	}
+
+	totalCount := trie.CountAll()
+	if totalCount != 10000 {
+		t.Errorf("Expected CountAll to be 10000, got %d", totalCount)
+	}
+
+	cidrs := trie.CollectCIDRs(5000, 24, 32, 0.1)
+	if len(cidrs) == 0 {
+		t.Fatal("Expected at least one CIDR from CollectCIDRs")
+	}
+
+	// Verify the returned CIDR contains 192.168.1.1
+	found := false
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatalf("Failed to parse returned CIDR %s: %v", cidr, err)
+		}
+		if ipNet.Contains(ip) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected a CIDR containing 192.168.1.1, got %v", cidrs)
+	}
+}
+
+func TestTrie_DeleteNonexistent(t *testing.T) {
+	trie := NewTrie()
+	ip := net.ParseIP("10.0.0.1")
+	if ip == nil {
+		t.Fatal("Failed to parse IP")
+	}
+
+	// Should not panic
+	trie.Delete(ip)
+
+	count := trie.CountAll()
+	if count != 0 {
+		t.Errorf("Expected CountAll to be 0 after deleting from empty trie, got %d", count)
+	}
+}

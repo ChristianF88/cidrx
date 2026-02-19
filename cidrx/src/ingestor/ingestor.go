@@ -1,6 +1,7 @@
 package ingestor
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -136,6 +137,9 @@ func parseEvent(evt map[string]interface{}, out *Request) error {
 		return errors.New("invalid IP")
 	}
 	out.IP = ip
+	if ip4 := ip.To4(); ip4 != nil {
+		out.IPUint32 = binary.BigEndian.Uint32(ip4)
+	}
 
 	// 2. Extract timestamp
 	start := strings.IndexByte(msg, '[')

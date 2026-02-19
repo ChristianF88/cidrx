@@ -36,6 +36,24 @@ func TestParseEvent_InvalidTimestamp(t *testing.T) {
 	}
 }
 
+func TestParseEvent_SetsIPUint32(t *testing.T) {
+	log := `192.168.1.100 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
+	evt := map[string]interface{}{"message": log}
+	var req Request
+	err := parseEvent(evt, &req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 192.168.1.100 = (192<<24) | (168<<16) | (1<<8) | 100 = 3232235876
+	want := uint32(192)<<24 | uint32(168)<<16 | uint32(1)<<8 | 100
+	if req.IPUint32 != want {
+		t.Errorf("expected IPUint32 %d, got %d", want, req.IPUint32)
+	}
+	if req.IP.String() != "192.168.1.100" {
+		t.Errorf("expected IP 192.168.1.100, got %v", req.IP)
+	}
+}
+
 func TestParseEvent_UnknownMethod(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "FOO /foo HTTP/1.1" 404 0 "-" "UA"`
 	evt := map[string]interface{}{"message": log}

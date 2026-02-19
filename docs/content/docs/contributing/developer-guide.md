@@ -114,6 +114,20 @@ go test ./logparser -v      # Specific package
 go test -race ./...         # Race detector
 ```
 
+### E2E Tests
+
+End-to-end tests live in `e2e/` and exercise the full binary against generated or live traffic.
+
+```bash
+cd e2e
+make all              # Static E2E tests (no Docker required)
+make live             # Live mode E2E test (requires Docker)
+make live-detection   # Live mode multi-trie detection test (requires Docker)
+make everything       # All of the above
+```
+
+Individual targets: `static`, `filters`, `whitelist-blacklist`, `live`, `live-detection`.
+
 ## Code Quality
 
 Run before every commit:
@@ -201,6 +215,7 @@ cidrx/
 │   ├── tui/            # Terminal user interface
 │   ├── version/        # Version info
 │   └── main.go
+├── e2e/                # End-to-end test scripts
 ├── docs/               # Hugo documentation
 ├── .github/workflows/  # CI/CD
 ├── .goreleaser.yaml    # Release configuration

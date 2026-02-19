@@ -480,3 +480,150 @@ func TestJail_Fill_Behaviors(t *testing.T) {
 		t.Errorf("Expected unrelated range %s to be added to jail", unrelated)
 	}
 }
+
+func TestJail_FullProgression(t *testing.T) {
+	j := NewJail()
+	cidr := "10.20.30.0/24"
+	numCells := len(j.Cells)
+
+	// Fill the first cell
+	if err := j.Fill(cidr); err != nil {
+		t.Fatalf("Fill failed on initial insert: %v", err)
+	}
+
+	// Progress through cells 0..3 by expiring each ban and calling Fill again
+	for i := 0; i < numCells-1; i++ {
+		cellIdx := findCellIndex(j, cidr)
+		if cellIdx != i {
+			t.Fatalf("Expected prisoner in cell %d, found in cell %d", i, cellIdx)
+		}
+
+		// Expire the ban in current cell
+		j.Cells[i].Prisoners[0].BanStart = time.Now().Add(-j.Cells[i].BanDuration - time.Minute)
+		j.Cells[i].Prisoners[0].BanActive = false
+
+		// Fill again to move to next cell
+		if err := j.Fill(cidr); err != nil {
+			t.Fatalf("Fill failed moving from cell %d to %d: %v", i, i+1, err)
+		}
+	}
+
+	// Verify prisoner is now in the last cell (index 4)
+	lastIdx := numCells - 1
+	cellIdx := findCellIndex(j, cidr)
+	if cellIdx != lastIdx {
+		t.Errorf("Expected prisoner in last cell %d, found in cell %d", lastIdx, cellIdx)
+	}
+
+	// Verify the last cell's ban duration is 180 days (4320 hours)
+	expectedDuration := 180 * 24 * time.Hour
+	if j.Cells[lastIdx].BanDuration != expectedDuration {
+		t.Errorf("Expected last cell ban duration %v, got %v", expectedDuration, j.Cells[lastIdx].BanDuration)
+	}
+
+	// Expire the ban in the last cell and Fill again -- should stay in last cell
+	j.Cells[lastIdx].Prisoners[0].BanStart = time.Now().Add(-j.Cells[lastIdx].BanDuration - time.Minute)
+	j.Cells[lastIdx].Prisoners[0].BanActive = false
+
+	if err := j.Fill(cidr); err != nil {
+		t.Fatalf("Fill failed when renewing ban in last cell: %v", err)
+	}
+
+	// Prisoner must still be in the last cell with an active ban
+	cellIdx = findCellIndex(j, cidr)
+	if cellIdx != lastIdx {
+		t.Errorf("Expected prisoner to stay in last cell %d after renewal, found in cell %d", lastIdx, cellIdx)
+	}
+
+	if !j.Cells[lastIdx].Prisoners[0].BanActive {
+		t.Errorf("Expected BanActive to be true after renewal in last cell")
+	}
+
+	// Ensure prisoner exists exactly once across all cells
+	count := 0
+	for _, cell := range j.Cells {
+		for _, p := range cell.Prisoners {
+			if p.CIDR == cidr {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("Expected prisoner to appear exactly once, found %d times", count)
+	}
+}
+
+func TestJail_PersistenceRoundTrip(t *testing.T) {
+	j := NewJail()
+
+	cidrs := []string{
+		"10.0.0.0/24",
+		"172.16.0.0/16",
+		"192.168.1.0/24",
+		"203.0.113.0/24",
+	}
+
+	// Add all CIDRs to cell 0
+	for _, cidr := range cidrs {
+		if err := j.Fill(cidr); err != nil {
+			t.Fatalf("Fill(%s) failed: %v", cidr, err)
+		}
+	}
+
+	// Move "172.16.0.0/16" to cell 1
+	idx := findCellIndex(j, "172.16.0.0/16")
+	for pi, p := range j.Cells[idx].Prisoners {
+		if p.CIDR == "172.16.0.0/16" {
+			j.Cells[idx].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[idx].BanDuration - time.Minute)
+			j.Cells[idx].Prisoners[pi].BanActive = false
+			break
+		}
+	}
+	j.Fill("172.16.0.0/16")
+
+	// Move "203.0.113.0/24" to cell 2 (two moves)
+	for move := 0; move < 2; move++ {
+		idx = findCellIndex(j, "203.0.113.0/24")
+		for pi, p := range j.Cells[idx].Prisoners {
+			if p.CIDR == "203.0.113.0/24" {
+				j.Cells[idx].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[idx].BanDuration - time.Minute)
+				j.Cells[idx].Prisoners[pi].BanActive = false
+				break
+			}
+		}
+		j.Fill("203.0.113.0/24")
+	}
+
+	// Verify pre-persistence state
+	if findCellIndex(j, "10.0.0.0/24") != 0 {
+		t.Fatalf("Expected 10.0.0.0/24 in cell 0")
+	}
+	if findCellIndex(j, "172.16.0.0/16") != 1 {
+		t.Fatalf("Expected 172.16.0.0/16 in cell 1")
+	}
+	if findCellIndex(j, "203.0.113.0/24") != 2 {
+		t.Fatalf("Expected 203.0.113.0/24 in cell 2")
+	}
+	if findCellIndex(j, "192.168.1.0/24") != 0 {
+		t.Fatalf("Expected 192.168.1.0/24 in cell 0")
+	}
+
+	// Write to temp file
+	tmpDir := t.TempDir()
+	filename := tmpDir + string(os.PathSeparator) + "jail_roundtrip.json"
+
+	if err := JailToFile(j, filename); err != nil {
+		t.Fatalf("JailToFile failed: %v", err)
+	}
+
+	// Read back
+	loaded, err := FileToJail(filename)
+	if err != nil {
+		t.Fatalf("FileToJail failed: %v", err)
+	}
+
+	// Compare using the existing helper from io_test.go
+	if !jailsAreEqual(j, loaded) {
+		t.Errorf("Loaded jail does not match original after round-trip persistence")
+	}
+}

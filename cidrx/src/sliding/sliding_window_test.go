@@ -836,3 +836,138 @@ func TestSlidingWindow_Update(t *testing.T) {
 		}
 	})
 }
+
+// TestSlidingWindow_ClusterDetection verifies that after filling the sliding
+// window with IPs concentrated in a single /16, CollectCIDRs detects the cluster.
+func TestSlidingWindow_ClusterDetection(t *testing.T) {
+	now := time.Now()
+	s := NewSlidingWindowTrie(60*time.Second, 100000)
+
+	// Insert 5000 IPs in 10.20.0.0/16
+	batch := make([]TimedIP, 5000)
+	for i := range batch {
+		v := i + 1
+		ip := net.IPv4(10, 20, byte(v/256), byte(v%256))
+		batch[i] = TimedIP{IP: ip, Time: now}
+	}
+	s.Update(batch)
+
+	if s.Trie.CountAll() != 5000 {
+		t.Fatalf("Expected 5000 IPs in trie, got %d", s.Trie.CountAll())
+	}
+
+	// CollectCIDRs should detect a cluster in the 10.20.x.x range
+	cidrs := s.Trie.CollectCIDRs(1000, 16, 24, 0.2)
+	if len(cidrs) == 0 {
+		t.Fatal("Expected at least one detected cluster")
+	}
+
+	found := false
+	for _, c := range cidrs {
+		if len(c) >= 5 && c[:5] == "10.20" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Expected cluster in 10.20.x.x range, got: %v", cidrs)
+	}
+}
+
+// TestSlidingWindow_EvictionByTime_Ordering verifies that time-based eviction
+// removes the oldest IPs first and preserves ordering.
+func TestSlidingWindow_EvictionByTime_Ordering(t *testing.T) {
+	s := NewSlidingWindowTrie(5*time.Second, 100)
+	now := time.Now()
+
+	// Insert 3 IPs at different times
+	ips := []TimedIP{
+		{IP: net.ParseIP("10.0.0.1"), Time: now.Add(-10 * time.Second)}, // expired
+		{IP: net.ParseIP("10.0.0.2"), Time: now.Add(-7 * time.Second)},  // expired
+		{IP: net.ParseIP("10.0.0.3"), Time: now.Add(-2 * time.Second)},  // active
+	}
+	s.InsertNew(ips)
+
+	if len(s.IPQueue) != 3 {
+		t.Fatalf("Expected 3 IPs before cleanup, got %d", len(s.IPQueue))
+	}
+
+	s.DropOld()
+
+	if len(s.IPQueue) != 1 {
+		t.Fatalf("Expected 1 IP after cleanup, got %d", len(s.IPQueue))
+	}
+
+	if !s.IPQueue[0].IP.Equal(net.ParseIP("10.0.0.3")) {
+		t.Errorf("Expected remaining IP to be 10.0.0.3, got %v", s.IPQueue[0].IP)
+	}
+
+	// Trie should also only have 1 entry
+	if s.Trie.CountAll() != 1 {
+		t.Errorf("Expected 1 IP in trie after cleanup, got %d", s.Trie.CountAll())
+	}
+}
+
+// TestSlidingWindow_EvictionBySize_OldestFirst verifies that when maxEntries
+// is exceeded, the oldest entries are evicted first.
+func TestSlidingWindow_EvictionBySize_OldestFirst(t *testing.T) {
+	s := NewSlidingWindowTrie(60*time.Second, 3) // long window, small max
+	now := time.Now()
+
+	// Insert 5 IPs (all within time window)
+	ips := make([]TimedIP, 5)
+	for i := range ips {
+		ips[i] = TimedIP{
+			IP:   net.IPv4(10, 0, 0, byte(i+1)),
+			Time: now.Add(time.Duration(i) * time.Second),
+		}
+	}
+	s.Update(ips)
+
+	// Should keep only the 3 newest
+	if s.Trie.CountAll() != 3 {
+		t.Errorf("Expected 3 IPs in trie, got %d", s.Trie.CountAll())
+	}
+	if len(s.IPQueue) != 3 {
+		t.Errorf("Expected 3 IPs in queue, got %d", len(s.IPQueue))
+	}
+
+	// Verify the kept IPs are 10.0.0.3, 10.0.0.4, 10.0.0.5
+	for i, qip := range s.IPQueue {
+		expected := net.IPv4(10, 0, 0, byte(i+3))
+		if !qip.IP.Equal(expected) {
+			t.Errorf("Queue[%d]: expected %v, got %v", i, expected, qip.IP)
+		}
+	}
+}
+
+// TestSlidingWindow_IPStatAccumulation verifies that repeated inserts of the
+// same IP correctly accumulate count and DeltaT.
+func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
+	s := NewSlidingWindowTrie(60*time.Second, 100)
+	now := time.Now()
+
+	ip := net.ParseIP("192.168.1.1")
+	ips := []TimedIP{
+		{IP: ip, EndpointAllowed: true, UserAgentAllowed: false, Time: now},
+		{IP: ip, EndpointAllowed: false, UserAgentAllowed: true, Time: now.Add(2 * time.Second)},
+		{IP: ip, EndpointAllowed: true, UserAgentAllowed: true, Time: now.Add(5 * time.Second)},
+	}
+	s.Update(ips)
+
+	stat, exists := s.IPStats.Get(iputils.IPToUint32(ip))
+	if !exists {
+		t.Fatal("Expected IP stat to exist")
+	}
+	if stat.Count != 3 {
+		t.Errorf("Expected count 3, got %d", stat.Count)
+	}
+	if len(stat.DeltaT) != 2 {
+		t.Errorf("Expected 2 DeltaT entries, got %d", len(stat.DeltaT))
+	}
+	if stat.DeltaT[0] != 2*time.Second {
+		t.Errorf("Expected DeltaT[0] = 2s, got %v", stat.DeltaT[0])
+	}
+	if stat.DeltaT[1] != 3*time.Second {
+		t.Errorf("Expected DeltaT[1] = 3s, got %v", stat.DeltaT[1])
+	}
+}

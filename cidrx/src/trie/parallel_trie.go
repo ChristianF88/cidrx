@@ -22,6 +22,18 @@ func NewParallelTrie() *ParallelTrie {
 	}
 }
 
+// NewParallelTrieSeq creates a ParallelTrie whose embedded Trie is backed by the
+// lock-free sequential bump allocator (see NewTrieSeq). It is intended for the
+// single-threaded static build path where each trie is built by exactly one
+// goroutine via BuildSortedUint32. Do NOT use the parallel-insert methods
+// (BatchParallelInsert*, ChannelInsertWorker, ParallelInsert*) on a seq-backed
+// trie: the seq allocator is not safe for concurrent node allocation.
+func NewParallelTrieSeq() *ParallelTrie {
+	return &ParallelTrie{
+		Trie: NewTrieSeq(),
+	}
+}
+
 // ParallelInsert performs thread-safe insertion
 func (pt *ParallelTrie) ParallelInsert(ip net.IP) {
 	val := iputils.IPToUint32(ip)

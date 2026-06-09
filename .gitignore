@@ -12,6 +12,9 @@ cidrx.toml
 cidrx-testing.toml
 CLAUDE.local.md
 
+# Local-only audit tickets (never checked in)
+tickets/
+
 # Output files
 cidrx_ban.txt
 cidrx_jail.json

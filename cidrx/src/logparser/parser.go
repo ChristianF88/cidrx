@@ -105,6 +105,245 @@ func (pp *ParallelParser) ParseFile(filename string) ([]ingestor.Request, error)
 	return pp.parseFileWithConcurrentIO(file, fileSize)
 }
 
+// ParseFileIPs parses a log file extracting ONLY the IPv4 address of each line
+// as a uint32, skipping all other field work and never allocating an
+// ingestor.Request. It uses the same adaptive streaming/concurrent I/O
+// structure as ParseFile (same slab+batch line readers).
+//
+// Returns the slice of nonzero IPs (lines whose IP parsed successfully) and
+// invalidCount = the number of lines whose IP failed to parse (extractIPOnly
+// returned 0). This matches the downstream "invalid/missing IP" semantics:
+// nonzero IPs flow into the trie, zero IPs are counted invalid. Order is not
+// preserved (downstream radix-sorts), but the multiset of nonzero IPs and the
+// invalid count are identical to ParseFile's req.IPUint32 stream.
+func (pp *ParallelParser) ParseFileIPs(filename string) (ips []uint32, invalidCount int, err error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	fileSize := stat.Size()
+
+	const largeFileThreshold = 500 * 1024 * 1024 // 500MB
+	if fileSize < largeFileThreshold {
+		return pp.parseFileIPsStreamingIO(filename)
+	}
+	return pp.parseFileIPsConcurrentIO(file, fileSize)
+}
+
+// ipResult carries an IP-only worker batch plus its invalid count back to the
+// collector, so invalid lines are counted without shipping zero IPs.
+type ipResult struct {
+	ips     []uint32
+	invalid int
+}
+
+// parseFileIPsStreamingIO mirrors parseFileWithStreamingIO but the worker stage
+// calls extractIPOnly and accumulates []uint32 (skipping/counting zero IPs).
+func (pp *ParallelParser) parseFileIPsStreamingIO(filename string) ([]uint32, int, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer file.Close()
+
+	estimatedLines := 1000
+	if stat, err := file.Stat(); err == nil {
+		estimatedLines = int(stat.Size() / 200)
+		if estimatedLines < 1000 {
+			estimatedLines = 1000
+		}
+	}
+
+	linesChan := make(chan [][]byte, pp.workers*2)
+	resultsChan := make(chan ipResult, pp.workers*2)
+
+	var wg sync.WaitGroup
+	cf := pp.compiled
+	for i := 0; i < pp.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for batch := range linesChan {
+				res := make([]uint32, 0, len(batch))
+				invalid := 0
+				for _, line := range batch {
+					ip := cf.extractIPOnly(line)
+					if ip != 0 {
+						res = append(res, ip)
+					} else {
+						invalid++
+					}
+				}
+				if len(res) > 0 || invalid > 0 {
+					resultsChan <- ipResult{ips: res, invalid: invalid}
+				}
+			}
+		}()
+	}
+
+	ips := make([]uint32, 0, estimatedLines)
+	invalidCount := 0
+	var collectorWG sync.WaitGroup
+	collectorWG.Add(1)
+	go func() {
+		defer collectorWG.Done()
+		for r := range resultsChan {
+			ips = append(ips, r.ips...)
+			invalidCount += r.invalid
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024)
+
+	const slabSize = 256 * 1024
+	batch := make([][]byte, 0, parseBatchSize)
+	slab := make([]byte, 0, slabSize)
+	for scanner.Scan() {
+		scanBytes := scanner.Bytes()
+		lineLen := len(scanBytes)
+
+		if len(slab)+lineLen > cap(slab) {
+			newCap := slabSize
+			if lineLen > newCap {
+				newCap = lineLen
+			}
+			slab = make([]byte, 0, newCap)
+		}
+
+		start := len(slab)
+		slab = append(slab, scanBytes...)
+		batch = append(batch, slab[start:start+lineLen])
+
+		if len(batch) >= parseBatchSize {
+			linesChan <- batch
+			batch = make([][]byte, 0, parseBatchSize)
+			slab = make([]byte, 0, slabSize)
+		}
+	}
+	if len(batch) > 0 {
+		linesChan <- batch
+	}
+
+	close(linesChan)
+	wg.Wait()
+	close(resultsChan)
+	collectorWG.Wait()
+
+	if err := scanner.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return ips, invalidCount, nil
+}
+
+// parseFileIPsConcurrentIO mirrors parseFileWithConcurrentIO but extracts only
+// IPs. It reuses readChunkBatched verbatim for the I/O stage.
+func (pp *ParallelParser) parseFileIPsConcurrentIO(file *os.File, fileSize int64) ([]uint32, int, error) {
+	return pp.parseFileIPsConcurrentIOChunked(file, fileSize, defaultConcurrentChunkSize)
+}
+
+// defaultConcurrentChunkSize is the production chunk size (64MB) for the
+// concurrent I/O path. Extracted as a constant so tests can drive the concurrent
+// path with a small chunk size on a normal-sized file (many chunks + boundary
+// crossings) without allocating a >=500MB file.
+const defaultConcurrentChunkSize = 64 * 1024 * 1024
+
+// parseFileIPsConcurrentIOChunked is the chunk-size-parameterized implementation
+// of parseFileIPsConcurrentIO. Production callers use defaultConcurrentChunkSize;
+// tests override chunkSize to exercise boundary handling on small files.
+func (pp *ParallelParser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]uint32, int, error) {
+	numChunks := int(fileSize / chunkSize)
+	if fileSize%chunkSize != 0 {
+		numChunks++
+	}
+
+	maxConcurrentChunks := runtime.NumCPU()
+	if maxConcurrentChunks > 8 {
+		maxConcurrentChunks = 8
+	}
+
+	estimatedLines := int(fileSize / 150)
+	if estimatedLines < 1000 {
+		estimatedLines = 1000
+	}
+
+	chunkJobs := make(chan chunkJob, numChunks)
+	linesChan := make(chan [][]byte, pp.workers*2)
+	resultsChan := make(chan ipResult, pp.workers*2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < maxConcurrentChunks; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range chunkJobs {
+				pp.readChunkBatched(file, job, fileSize, linesChan)
+			}
+		}()
+	}
+
+	cf := pp.compiled
+	var parserWG sync.WaitGroup
+	for i := 0; i < pp.workers; i++ {
+		parserWG.Add(1)
+		go func() {
+			defer parserWG.Done()
+			for batch := range linesChan {
+				res := make([]uint32, 0, len(batch))
+				invalid := 0
+				for _, line := range batch {
+					ip := cf.extractIPOnly(line)
+					if ip != 0 {
+						res = append(res, ip)
+					} else {
+						invalid++
+					}
+				}
+				if len(res) > 0 || invalid > 0 {
+					resultsChan <- ipResult{ips: res, invalid: invalid}
+				}
+			}
+		}()
+	}
+
+	ips := make([]uint32, 0, estimatedLines)
+	invalidCount := 0
+	var collectorWG sync.WaitGroup
+	collectorWG.Add(1)
+	go func() {
+		defer collectorWG.Done()
+		for r := range resultsChan {
+			ips = append(ips, r.ips...)
+			invalidCount += r.invalid
+		}
+	}()
+
+	for i := 0; i < numChunks; i++ {
+		start := int64(i) * chunkSize
+		end := start + chunkSize
+		if end > fileSize {
+			end = fileSize
+		}
+		chunkJobs <- chunkJob{start: start, end: end, index: i}
+	}
+	close(chunkJobs)
+
+	wg.Wait()
+	close(linesChan)
+	parserWG.Wait()
+	close(resultsChan)
+	collectorWG.Wait()
+
+	return ips, invalidCount, nil
+}
+
 // parseBatchSize is the number of lines per batch sent through channels.
 // Batching amortizes channel lock/unlock overhead: 1M lines = ~1K channel ops instead of 1M.
 const parseBatchSize = 1024
@@ -243,7 +482,13 @@ func (pp *ParallelParser) ParseFileParallel(filename string) ([]ingestor.Request
 // Uses ReadAt for thread-safe parallel reads, batched channels matching the
 // streaming path, and per-worker Request reuse (no sync.Pool needed).
 func (pp *ParallelParser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
-	const chunkSize = 64 * 1024 * 1024 // 64MB chunks for optimal I/O
+	return pp.parseFileConcurrentIOChunked(file, fileSize, defaultConcurrentChunkSize)
+}
+
+// parseFileConcurrentIOChunked is the chunk-size-parameterized implementation of
+// parseFileWithConcurrentIO. Production callers use defaultConcurrentChunkSize
+// (64MB); tests override chunkSize to exercise the concurrent path on small files.
+func (pp *ParallelParser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -344,92 +589,136 @@ type chunkJob struct {
 }
 
 // readChunkBatched reads a file chunk using ReadAt and sends batched line slices.
-// Uses a slab allocator for line data, matching the streaming path's approach.
+//
+// Lines are zero-copy sub-slices of the chunk's freshly-allocated `buffer`: one
+// allocation per chunk is shared by all of that chunk's line slices. No slab copy
+// is performed (unlike the streaming path, which must copy because bufio.Scanner
+// reuses its internal buffer). The buffer is never mutated or reused after ReadAt,
+// so the sub-slices remain valid for the lifetime of the resulting Requests.
+//
+// Lifetime: in full-Request mode, parseUsingCompiledFormatOpt stores URI/UserAgent
+// as unsafe.String views aliasing the line bytes; those strings keep `buffer`
+// reachable so the GC retains it as long as any Request lives. In IP-only mode
+// nothing aliases the bytes, so the buffer is freed once the chunk is parsed.
 func (pp *ParallelParser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, linesChan chan<- [][]byte) {
 	chunkLen := job.end - job.start
 	if chunkLen <= 0 {
 		return
 	}
 
-	// Read the chunk with overlap for line boundary handling
+	// Read the chunk with overlap for line boundary handling. For non-first
+	// chunks we additionally read ONE byte before job.start (the "sentinel"): it
+	// lets us tell whether a line begins exactly at the chunk boundary (sentinel
+	// == '\n') versus the boundary falling mid-line. Without this, a line whose
+	// start offset equals job.start would be owned by neither chunk (the previous
+	// chunk stops at job.end; this chunk would skip it as a leading partial line).
 	overlap := int64(8192)
 	readEnd := job.end + overlap
 	if readEnd > fileSize {
 		readEnd = fileSize
 	}
-	readSize := readEnd - job.start
+
+	// readStart is the absolute file offset of buffer[0]. `pad` is the number of
+	// sentinel bytes prepended (1 for non-first chunks, 0 for chunk 0).
+	readStart := job.start
+	pad := 0
+	if job.index > 0 {
+		readStart = job.start - 1
+		pad = 1
+	}
+	readSize := readEnd - readStart
 
 	buffer := make([]byte, readSize)
-	n, err := file.ReadAt(buffer, job.start)
+	n, err := file.ReadAt(buffer, readStart)
 	if err != nil && err != io.EOF {
-		fmt.Fprintf(os.Stderr, "readChunkBatched: ReadAt offset %d: %v\n", job.start, err)
+		fmt.Fprintf(os.Stderr, "readChunkBatched: ReadAt offset %d: %v\n", readStart, err)
 		return
 	}
 	buffer = buffer[:n]
-
-	// For non-first chunks, skip the first (likely partial) line
-	start := 0
-	if job.index > 0 {
-		idx := bytes.IndexByte(buffer, '\n')
-		if idx < 0 {
-			return
-		}
-		start = idx + 1
+	if len(buffer) < pad {
+		return
 	}
 
-	// Extract lines into batches using slab allocator
-	const slabSize = 256 * 1024
+	// Ownership rule (must exactly partition the file so every physical line is
+	// emitted by exactly one chunk, with no loss or duplication):
+	//
+	//   A chunk owns a line iff that line's START offset lies in the half-open
+	//   absolute range [job.start, job.end).
+	//
+	// A line "starts" at file offset 0, or at the byte immediately following a
+	// newline. The line may extend (its terminating newline may fall) beyond
+	// job.end into the overlap region — we read `overlap` extra bytes precisely
+	// so a boundary-straddling line owned by THIS chunk can be completed here.
+	//
+	// Disjointness: the line straddling the boundary (start < job.end <= newline)
+	// is owned by chunk N because its start is in chunk N's range. Chunk N+1 skips
+	// exactly that line via the leading-newline scan below, so it is emitted once.
+	//
+	// `start` is the buffer-relative offset of the first line owned by this chunk.
+	// The chunk boundary job.start sits at buffer offset `pad`.
+	//
+	//   - Chunk 0: pad == 0, start == 0 (== job.start).
+	//   - Later chunks: if the sentinel byte buffer[0] (== file byte job.start-1)
+	//     is a newline, a line begins exactly AT the boundary; that line's start
+	//     is in [job.start, job.end) so THIS chunk owns it — start = pad.
+	//     Otherwise the byte at job.start is mid-line (owned by the previous
+	//     chunk); skip to just after the first newline.
+	start := 0
+	if job.index > 0 {
+		if buffer[0] == '\n' {
+			// Line starts exactly at the boundary; own it.
+			start = pad
+		} else {
+			idx := bytes.IndexByte(buffer, '\n')
+			if idx < 0 {
+				// No newline in this chunk's window: the single line covering this
+				// chunk started in a previous chunk and is owned there.
+				return
+			}
+			start = idx + 1
+		}
+	}
+
+	// chunkEnd is job.end expressed as a buffer-relative offset. A line is owned
+	// when its START offset `start` satisfies start < chunkEnd.
+	chunkEnd := pad + int(job.end-job.start)
+
+	// Extract lines as zero-copy sub-slices of `buffer`. The whole chunk is one
+	// allocation shared by every line slice; no per-line slab copy is done.
 	batch := make([][]byte, 0, parseBatchSize)
-	slab := make([]byte, 0, slabSize)
-	bytesProcessed := 0
 
 	for i := start; i < len(buffer); i++ {
 		if buffer[i] == '\n' {
-			lineData := buffer[start:i]
-			start = i + 1
-
-			// Stop if we've gone past this chunk's boundary
-			if job.start+int64(bytesProcessed) >= job.end {
+			// Stop once the CURRENT line started at/after the chunk boundary: that
+			// line is owned by the next chunk.
+			if start >= chunkEnd {
 				break
 			}
-			bytesProcessed = i + 1
+
+			lineData := buffer[start:i]
+			start = i + 1
 
 			if len(lineData) == 0 {
 				continue
 			}
 
-			// Sub-allocate from slab
-			lineLen := len(lineData)
-			if len(slab)+lineLen > cap(slab) {
-				newCap := slabSize
-				if lineLen > newCap {
-					newCap = lineLen
-				}
-				slab = make([]byte, 0, newCap)
-			}
-			slabStart := len(slab)
-			slab = append(slab, lineData...)
-			batch = append(batch, slab[slabStart:slabStart+lineLen])
+			// Zero-copy: append the sub-slice of buffer directly.
+			batch = append(batch, lineData)
 
 			if len(batch) >= parseBatchSize {
 				linesChan <- batch
 				batch = make([][]byte, 0, parseBatchSize)
-				slab = make([]byte, 0, slabSize)
 			}
 		}
 	}
 
-	// Handle the last line if it doesn't end with newline and we're at EOF
-	if start < len(buffer) && readEnd == fileSize {
+	// Handle a final line with no terminating newline. This is the very last line
+	// of a file with no trailing '\n'. It is owned by whichever chunk's read
+	// reached EOF and whose range contains the line's start (start < chunkEnd).
+	if readEnd == fileSize && start < len(buffer) && start < chunkEnd {
 		lineData := buffer[start:]
 		if len(lineData) > 0 {
-			lineLen := len(lineData)
-			if len(slab)+lineLen > cap(slab) {
-				slab = make([]byte, 0, lineLen)
-			}
-			slabStart := len(slab)
-			slab = append(slab, lineData...)
-			batch = append(batch, slab[slabStart:slabStart+lineLen])
+			batch = append(batch, lineData)
 		}
 	}
 
@@ -754,6 +1043,85 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 	return nil
 }
 
+// extractIPOnly walks the compiled extractors exactly like
+// parseUsingCompiledFormatOpt (same quoted/bracketed/delimited field
+// boundary handling) but performs NO field stores, builds NO Request, and
+// returns as soon as the IP field (FieldType==0) has been parsed — it never
+// scans fields that come after the IP. It returns the same uint32 that
+// parseUsingCompiledFormatOpt would write to req.IPUint32 (0 on a failed or
+// missing IP parse).
+//
+// This is the dominant fast path for clustering / static analysis where only
+// the IP is needed.
+func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
+	pos := 0
+
+	for ei := range cf.extractors {
+		extractor := &cf.extractors[ei]
+		if pos >= len(line) {
+			break
+		}
+
+		// Skip whitespace
+		for pos < len(line) && line[pos] == ' ' {
+			pos++
+		}
+
+		start := pos
+
+		// Handle quoted/bracketed fields — identical boundary logic to
+		// parseUsingCompiledFormatOpt so that pos lands on the same offsets.
+		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
+			pos++ // skip opening quote
+			start = pos
+			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
+				pos += idx
+			} else {
+				pos = len(line)
+			}
+		} else if extractor.Brackets && pos < len(line) && line[pos] == '[' {
+			pos++ // skip opening bracket
+			start = pos
+			if idx := bytes.IndexByte(line[pos:], ']'); idx >= 0 {
+				pos += idx
+			} else {
+				pos = len(line)
+			}
+		} else {
+			delimiter := extractor.Delimiter
+			if delimiter == 0 {
+				delimiter = ' '
+			}
+			for pos < len(line) && line[pos] != delimiter && line[pos] != ' ' {
+				pos++
+			}
+		}
+
+		// IP field: parse and return immediately. The guard `start < pos`
+		// matches the original (only fields with content are parsed); when the
+		// IP field has no content we fall through and return 0 below, which is
+		// exactly what req.IPUint32 would remain (zero value).
+		if extractor.FieldType == 0 {
+			if start < pos {
+				return parseIPv4ToUint32(line, start, pos)
+			}
+			return 0
+		}
+
+		// Advance past closing quotes/brackets/delimiters — identical to
+		// parseUsingCompiledFormatOpt so subsequent field boundaries align.
+		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
+			pos++
+		} else if extractor.Brackets && pos < len(line) && line[pos] == ']' {
+			pos++
+		} else if pos < len(line) && line[pos] == extractor.Delimiter {
+			pos++
+		}
+	}
+
+	return 0
+}
+
 // bytesToString converts byte slice to string without copying.
 // Safe when the backing byte slice is not mutated after this call (e.g., lineCopy
 // allocated per-line in parseFileWithStreamingIO is never reused).
@@ -775,35 +1143,59 @@ func bytesToString(b []byte) string {
 // Input: line[start:end] should contain IPv4 like "192.168.1.1"
 // Returns: uint32 IP or 0 if invalid format
 func parseIPv4ToUint32(line []byte, start, end int) uint32 {
-	if end-start < 7 || end-start > 15 {
+	n := end - start
+	if n < 7 || n > 15 {
 		return 0
 	}
-	// BCE hint: prove line[end-1] is in bounds, eliminating per-iteration bounds check
-	if end > len(line) {
+	// BCE hint: prove line[start:end] is fully in bounds, eliminating the
+	// per-iteration bounds check in the loop below.
+	if start < 0 || end > len(line) {
 		return 0
 	}
 
-	// Count dots and parse in one pass with bit masking
-	dots := 0
-	partIdx := 0
+	// Single-pass parse. We accumulate each octet into current and commit it on
+	// a dot. The loop is branch-light: the dot test and the digit test are the
+	// only data-dependent branches, and any deviation funnels into a single
+	// `return 0`.
+	//
+	// Correctness contract (identical to the previous implementation):
+	//   - exactly 3 dots, exactly 4 parts
+	//   - every non-dot byte must be an ASCII digit
+	//   - each committed octet (current at a dot, and the final part) must be <=255
+	//   - leading zeros are accepted (current = current*10 + digit, no rejection)
+	//   - any violation -> 0
+	//
+	// We never need partIdx>=3 as a guard the way the old loop did: with the
+	// dots!=3 check at the end, a 4th dot would push dots to 4 and be rejected,
+	// but the old code returned 0 *immediately* on the 4th dot (partIdx>=3).
+	// To preserve that exact early-out semantics for the >255-then-extra-dot
+	// edge, we cap commits at 4 parts via partIdx and reject a 4th dot.
 	current := 0
+	partIdx := 0
 	var result uint32
+	dots := 0
 
-	for i := start; i < end; i++ {
-		b := line[i]
-		if b == '.' {
-			if current > 255 || partIdx >= 3 {
-				return 0
-			}
-			result |= uint32(current) << (24 - 8*partIdx)
-			partIdx++
-			current = 0
-			dots++
-		} else if b >= '0' && b <= '9' {
-			current = current*10 + int(b&0x0F)
-		} else {
+	sub := line[start:end]
+	for i := 0; i < len(sub); i++ {
+		b := sub[i]
+		d := b - '0'
+		if d <= 9 {
+			// ASCII digit fast path (b in '0'..'9' => b-'0' in 0..9, unsigned).
+			current = current*10 + int(d)
+			continue
+		}
+		if b != '.' {
 			return 0
 		}
+		// Dot: commit the current octet. Identical guard order to the original:
+		// reject if the octet overflows 255 or we already have 3 committed parts.
+		if current > 255 || partIdx >= 3 {
+			return 0
+		}
+		result |= uint32(current) << (24 - 8*partIdx)
+		partIdx++
+		current = 0
+		dots++
 	}
 
 	if dots != 3 || current > 255 || partIdx != 3 {

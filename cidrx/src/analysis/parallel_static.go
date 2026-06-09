@@ -239,8 +239,10 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	// Set CIDRRanges after null check
 	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
 
-	// Create parallel trie
-	trieInstance := trie.NewParallelTrie()
+	// Create parallel trie backed by the seq allocator: this trie is built by a
+	// single goroutine via BuildSortedUint32 (one of the radix-sorted branches
+	// below), so the lock-free sequential allocator is safe here.
+	trieInstance := trie.NewParallelTrieSeq()
 
 	// Apply filtering and collect IPs for parallel insertion
 	var startTime, endTime time.Time
@@ -318,8 +320,9 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		// Radix sort: O(n) vs sort.Slice O(n log n) — 10-15x faster for large arrays
 		iputils.RadixSortUint32(ipUints)
 
-		// Use optimized sorted insertion
-		trieInstance.BatchInsertSortedUint32(ipUints)
+		// Use the seq prefix-stack build (bit-identical to BatchInsertSortedUint32
+		// for ascending-sorted input, ~2x faster).
+		trieInstance.BuildSortedUint32(ipUints)
 	} else {
 		// Adaptive filtering: use concurrent processing only when complex patterns justify overhead
 		usesConcurrency := len(requests) > 50000 && hasFilters
@@ -348,7 +351,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		// Radix sort + batch sorted insert — same optimization as unfiltered fast path
 		if len(ipsToInsertUint32) > 0 {
 			iputils.RadixSortUint32(ipsToInsertUint32)
-			trieInstance.BatchInsertSortedUint32(ipsToInsertUint32)
+			trieInstance.BuildSortedUint32(ipsToInsertUint32)
 		}
 	}
 
@@ -409,6 +412,246 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
 
 	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
+}
+
+// ParallelStaticFromConfigNoRequests runs parallel static analysis and returns
+// the same *output.JSONOutput as ParallelStaticFromConfigWithRequests, but never
+// returns the parsed []ingestor.Request. For the common unfiltered case (no
+// UA/endpoint/time filters on any trie) it takes an IP-only parse fast path that
+// never materialises ingestor.Request structs, cutting allocations sharply.
+//
+// When any trie requires non-IP fields (filters present) it delegates to
+// ParallelStaticFromConfigWithRequests and drops the requests, since correct
+// filtering needs the full request fields.
+func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput, error) {
+	analysisStart := time.Now()
+	jsonOutput := output.NewJSONOutput("static", analysisStart)
+
+	// Validate config (mirror ParallelStaticFromConfigWithRequests exactly).
+	if cfg == nil {
+		jsonOutput.AddError("config_error", "configuration is nil", 1)
+		return jsonOutput, fmt.Errorf("configuration is nil")
+	}
+	if cfg.Static == nil {
+		jsonOutput.AddError("config_error", "static configuration section is missing", 1)
+		return jsonOutput, fmt.Errorf("static configuration section is missing")
+	}
+	if len(cfg.StaticTries) == 0 {
+		jsonOutput.AddWarning("config_warning", "no static tries configured, analysis may have limited results", 1)
+	}
+
+	logFormat := cfg.Static.LogFormat
+	if logFormat == "" {
+		logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+	}
+
+	parser, err := logparser.NewParallelParser(logFormat)
+	if err != nil {
+		jsonOutput.AddError("parser_init", fmt.Sprintf("failed to create parallel parser: %v", err), 1)
+		return jsonOutput, err
+	}
+
+	// Determine whether any trie needs non-IP fields (filters). This is the same
+	// decision made by ParallelStaticFromConfigWithRequests.
+	needsStringFields := false
+	needsNonIPFields := false
+	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
+	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
+	for _, tc := range cfg.StaticTries {
+		if tc == nil {
+			continue
+		}
+		if hasGlobalUAFilters || tc.UserAgentRegex != "" || tc.EndpointRegex != "" {
+			needsStringFields = true
+			needsNonIPFields = true
+		}
+		if tc.StartTime != nil || tc.EndTime != nil {
+			needsNonIPFields = true
+		}
+	}
+
+	// Filters present: correctness first — delegate to the full path and drop the
+	// requests slice.
+	if needsNonIPFields {
+		_ = needsStringFields
+		result, _, derr := ParallelStaticFromConfigWithRequests(cfg)
+		return result, derr
+	}
+
+	// IP-only fast path: parse only IPs, no ingestor.Request built.
+	parser.SkipStringFields = true
+	parser.SkipNonIPFields = true
+
+	parseStart := time.Now()
+	ips, invalidCount, perr := parser.ParseFileIPs(cfg.Static.LogFile)
+	parseDuration := time.Since(parseStart)
+	if perr != nil {
+		jsonOutput.AddError("parse_file", fmt.Sprintf("failed to parse log file %s: %v", cfg.Static.LogFile, perr), 1)
+		return jsonOutput, perr
+	}
+
+	// TotalRequests must equal len(requests) from the full path: all parsed lines,
+	// i.e. nonzero IPs (len(ips)) plus zero-IP lines (invalidCount).
+	totalRequests := len(ips) + invalidCount
+
+	jsonOutput.General.LogFile = cfg.Static.LogFile
+	jsonOutput.General.TotalRequests = totalRequests
+	jsonOutput.General.Parsing.DurationMS = parseDuration.Milliseconds()
+	jsonOutput.General.Parsing.RatePerSecond = int64(float64(totalRequests) / parseDuration.Seconds())
+	jsonOutput.General.Parsing.Format = logFormat
+
+	if totalRequests == 0 {
+		jsonOutput.AddWarning("empty_logfile", "No requests found in logfile", 1)
+		return jsonOutput, nil
+	}
+
+	// Sort the IPs ONCE — shared across all tries (an extra win vs per-trie sort).
+	iputils.RadixSortUint32(ips)
+
+	// Process tries in parallel, mirroring ParallelStaticFromConfigWithRequests.
+	var trieWG sync.WaitGroup
+	var triesMutex sync.Mutex
+	trieResults := make([]output.TrieResult, 0, len(cfg.StaticTries))
+
+	type trieWork struct {
+		name   string
+		config *config.TrieConfig
+	}
+
+	trieWorkChan := make(chan trieWork, len(cfg.StaticTries))
+
+	numTrieWorkers := runtime.NumCPU()
+	if len(cfg.StaticTries) < numTrieWorkers {
+		numTrieWorkers = len(cfg.StaticTries)
+	}
+
+	for i := 0; i < numTrieWorkers; i++ {
+		trieWG.Add(1)
+		go func() {
+			defer trieWG.Done()
+			for work := range trieWorkChan {
+				result := processTrieFromSortedIPs(work.name, work.config, ips, totalRequests, invalidCount, jsonOutput)
+				triesMutex.Lock()
+				trieResults = append(trieResults, result)
+				triesMutex.Unlock()
+			}
+		}()
+	}
+
+	for trieName, trieConfig := range cfg.StaticTries {
+		trieWorkChan <- trieWork{name: trieName, config: trieConfig}
+	}
+	close(trieWorkChan)
+	trieWG.Wait()
+
+	// Sort results by name for consistency with the sequential/full version.
+	sort.Slice(trieResults, func(i, j int) bool {
+		return trieResults[i].Name < trieResults[j].Name
+	})
+
+	jsonOutput.Tries = trieResults
+
+	// Set General.UniqueIPs to the max across all tries.
+	for _, tr := range trieResults {
+		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
+			jsonOutput.General.UniqueIPs = tr.Stats.UniqueIPs
+		}
+	}
+
+	// No filters => no User-Agent derived IP sets; UserAgentWhitelistIPs /
+	// UserAgentBlacklistIPs stay empty, exactly as the full path produces here.
+
+	// Process jail with whitelist/blacklist if configured.
+	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
+		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
+			jsonOutput.AddError("jail_processing", fmt.Sprintf("failed to process jail with whitelist/blacklist: %v", err), 1)
+		}
+	}
+
+	jsonOutput.UpdateDuration(analysisStart)
+	return jsonOutput, nil
+}
+
+// processTrieFromSortedIPs builds a single trie from a shared, already
+// ascending-sorted slice of nonzero IPs and populates the TrieResult identically
+// to processTrieParallel's unfiltered branch (no filters => no UA IP sets, so it
+// returns no whitelist/blacklist IPs). sortedIPs is read-only and shared across
+// tries; it must not be mutated. totalRequests is the full-path TotalRequests
+// (len(ips)+invalidCount) used as the denominator for the invalid-IP warning;
+// invalidCount is the number of zero-IP lines skipped during parsing.
+func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, sortedIPs []uint32,
+	totalRequests, invalidCount int, jsonOutput *output.JSONOutput) output.TrieResult {
+
+	insertStart := time.Now()
+
+	trieResult := output.TrieResult{
+		Name:       trieName,
+		Parameters: output.TrieParameters{},
+		Stats:      output.TrieStats{},
+		Data:       []output.ClusterResult{},
+	}
+
+	if trieConfig == nil {
+		jsonOutput.AddWarning("config_warning", fmt.Sprintf("trie configuration '%s' is nil, skipping", trieName), 1)
+		return trieResult
+	}
+
+	// In the unfiltered case there are no time/regex filters, so the time-parse
+	// and time-range warnings in processTrieParallel never fire; we mirror that by
+	// only carrying the CIDRRanges parameter (and UseForJail, which is filter
+	// independent).
+	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
+	if len(trieConfig.UseForJail) > 0 {
+		trieResult.Parameters.UseForJail = trieConfig.UseForJail
+	}
+
+	// Build the trie from the shared sorted IPs using the seq prefix-stack build.
+	trieInstance := trie.NewParallelTrieSeq()
+	trieInstance.BuildSortedUint32(sortedIPs)
+
+	insertDuration := time.Since(insertStart)
+
+	// Invalid-IP warning: identical message and denominator (totalRequests ==
+	// len(requests) in the full path).
+	if invalidCount > 0 {
+		percentage := float64(invalidCount) / float64(totalRequests) * 100
+		jsonOutput.AddWarning("invalid_ips_skipped",
+			fmt.Sprintf("%d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", invalidCount, percentage), 1)
+	}
+
+	// Stats: in the unfiltered branch TotalRequestsAfterFiltering == number of
+	// nonzero IPs inserted == len(sortedIPs); SkippedInvalidIPs == invalidCount.
+	trieResult.Stats = output.TrieStats{
+		TotalRequestsAfterFiltering: len(sortedIPs),
+		UniqueIPs:                   int(trieInstance.ParallelCountAll()),
+		SkippedInvalidIPs:           invalidCount,
+		InsertTimeMS:                insertDuration.Milliseconds(),
+	}
+
+	// CIDR range analysis (identical to processTrieParallel).
+	if len(trieConfig.CIDRRanges) > 0 {
+		for _, cidrRange := range trieConfig.CIDRRanges {
+			count, err := trieInstance.ParallelCountInRange(cidrRange)
+			if err != nil {
+				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range '%s': %v", cidrRange, err), 1)
+				continue
+			}
+			var percentage float64
+			if trieInstance.ParallelCountAll() > 0 {
+				percentage = float64(count) / float64(trieInstance.ParallelCountAll()) * 100
+			}
+			trieResult.Stats.CIDRAnalysis = append(trieResult.Stats.CIDRAnalysis, output.CIDRRange{
+				CIDR:       cidrRange,
+				Requests:   count,
+				Percentage: percentage,
+			})
+		}
+	}
+
+	// Clustering (identical to processTrieParallel).
+	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
+
+	return trieResult
 }
 
 // processRequestsConcurrentlyParallel implements high-performance concurrent filtering

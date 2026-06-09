@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"math/bits"
 	"net"
 
 	"github.com/ChristianF88/cidrx/cidr"
@@ -16,6 +17,7 @@ type TrieNode = pools.TrieNode
 type Trie struct {
 	Root      *TrieNode
 	allocator *pools.NodeAllocator
+	seqAlloc  *pools.SeqNodeAllocator
 }
 
 // NewTrie creates a new binary trie optimized for IP address storage
@@ -25,6 +27,97 @@ func NewTrie() *Trie {
 	return &Trie{
 		Root:      allocator.GetNode(),
 		allocator: allocator,
+	}
+}
+
+// NewTrieSeq creates a binary trie backed by a lock-free sequential bump
+// allocator (single-thread use only). Intended to be paired with
+// BuildSortedUint32 for the fastest possible sorted build.
+func NewTrieSeq() *Trie {
+	a := pools.NewSeqNodeAllocator()
+	return &Trie{Root: a.GetNode(), seqAlloc: a}
+}
+
+// BuildSortedUint32 builds the trie from an ASCENDING-sorted slice of uint32
+// IPs using a deferred-count prefix-stack algorithm. It REQUIRES a trie created
+// by NewTrieSeq (t.seqAlloc != nil) and ascending-sorted input.
+//
+// The produced trie is bit-identical to BatchInsertSortedUint32 (same node
+// structure, same per-node Count, Root.Count left at 0) but avoids
+// re-descending shared prefixes and writes each node's Count exactly once.
+//
+// path[d] is the node reached after matching d bits (depths 1..32 are real
+// nodes; path[0] is the Root). pending[d] is the multiplicity accumulated for
+// the currently-open node at path[d], not yet flushed into its .Count. Because
+// the input is sorted, all IPs sharing a prefix are contiguous, so the node for
+// that prefix stays open across exactly those runs and is flushed once on close.
+func (t *Trie) BuildSortedUint32(ips []uint32) {
+	if len(ips) == 0 {
+		return
+	}
+
+	var path [33]*TrieNode
+	var pending [33]uint32
+	path[0] = t.Root
+
+	// descend creates/follows nodes from depth d+1..32 for value v, setting
+	// pending=m on each freshly opened depth.
+	descend := func(d int, v uint32, m uint32) {
+		node := path[d]
+		for depth := d + 1; depth <= 32; depth++ {
+			i := uint(32 - depth)
+			bit := (v >> i) & 1
+			child := node.Children[bit]
+			if child == nil {
+				child = t.seqAlloc.GetNode()
+				node.Children[bit] = child
+			}
+			node = child
+			path[depth] = node
+			pending[depth] = m
+		}
+	}
+
+	// First run.
+	i := 0
+	v := ips[0]
+	m := uint32(1)
+	for i+int(m) < len(ips) && ips[i+int(m)] == v {
+		m++
+	}
+	descend(0, v, m)
+	pv := v
+	i += int(m)
+
+	for i < len(ips) {
+		v = ips[i]
+		m = 1
+		for i+int(m) < len(ips) && ips[i+int(m)] == v {
+			m++
+		}
+
+		// d = number of shared leading bits between pv and v (0..31, since v != pv).
+		d := bits.LeadingZeros32(pv ^ v)
+
+		// Close nodes deeper than the shared prefix: flush their pending counts.
+		for k := 32; k > d; k-- {
+			path[k].Count += pending[k]
+			pending[k] = 0
+		}
+		// Shared open nodes (depths 1..d) accumulate this run's multiplicity.
+		for k := 1; k <= d; k++ {
+			pending[k] += m
+		}
+		// Open new nodes from depth d for this value.
+		descend(d, v, m)
+
+		pv = v
+		i += int(m)
+	}
+
+	// Flush all remaining open nodes.
+	for k := 32; k >= 1; k-- {
+		path[k].Count += pending[k]
 	}
 }
 

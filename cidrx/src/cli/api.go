@@ -59,7 +59,19 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 		return executeTUI(cfg)
 	}
 
-	// Execute the actual analysis
+	// No heatmap requested: take the IP-only fast path that never materialises
+	// the []ingestor.Request slice (the requests would otherwise be discarded).
+	if cfg.Static == nil || cfg.Static.PlotPath == "" {
+		result, err := analysis.ParallelStaticFromConfigNoRequests(cfg)
+		if err != nil {
+			outputResult(result, outputConfig) // Output with errors
+			return fmt.Errorf("static analysis: %w", err)
+		}
+		outputResult(result, outputConfig)
+		return nil
+	}
+
+	// Heatmap requested: keep the full path so we can reuse the parsed requests.
 	result, requests, err := analysis.ParallelStaticFromConfigWithRequests(cfg)
 	if err != nil {
 		outputResult(result, outputConfig) // Output with errors

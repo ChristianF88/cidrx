@@ -597,8 +597,23 @@ func TestIntensityOfMapping(t *testing.T) {
 		t.Errorf("linear intensityOf(max/2) = %v, want 0.5", got)
 	}
 
+	// Sqrt mode (power scale): sqrt(x/max), endpoints exact, middle lifted.
+	v.scaleMode = scaleSqrt
+	if got := v.intensityOf(0, max); got != 0 {
+		t.Errorf("sqrt intensityOf(0) = %v, want 0", got)
+	}
+	if got := v.intensityOf(max, max); math.Abs(got-1) > 1e-12 {
+		t.Errorf("sqrt intensityOf(max) = %v, want 1", got)
+	}
+	if got := v.intensityOf(500, max); math.Abs(got-0.1) > 1e-9 {
+		t.Errorf("sqrt intensityOf(1%% of max) = %v, want 0.1", got)
+	}
+	if got := v.intensityOf(25000, max); math.Abs(got-math.Sqrt(0.5)) > 1e-9 {
+		t.Errorf("sqrt intensityOf(max/2) = %v, want %v", got, math.Sqrt(0.5))
+	}
+
 	// Log mode.
-	v.logScale = true
+	v.scaleMode = scaleLog
 	if got := v.intensityOf(0, max); got != 0 {
 		t.Errorf("log intensityOf(0) = %v, want 0", got)
 	}
@@ -617,23 +632,21 @@ func TestIntensityOfMapping(t *testing.T) {
 		prev = got
 	}
 
-	// Threshold round-trip: the count at the lower bound of each legend step
-	// must map back to an intensity at or just above that bound.
-	for step := 1; step <= 9; step++ {
-		bound := float64(step) / 10
-		count := intensityThresholdCount(bound, max)
-		if got := v.intensityOf(count, max); got < bound || got > bound+0.05 {
-			t.Errorf("threshold round-trip step %.1f: count %d maps to %v", bound, count, got)
+	// Threshold round-trip in every mode: the count at the lower bound of
+	// each legend step must map back to an intensity at or just above it.
+	for _, mode := range []int{scaleLinear, scaleSqrt, scaleLog} {
+		v.scaleMode = mode
+		for step := 1; step <= 9; step++ {
+			bound := float64(step) / 10
+			count := v.intensityThresholdCount(bound, max)
+			if got := v.intensityOf(count, max); got < bound || got > bound+0.05 {
+				t.Errorf("mode %d threshold round-trip step %.1f: count %d maps to %v", mode, bound, count, got)
+			}
 		}
-	}
-
-	// Zero max never divides by zero.
-	if got := v.intensityOf(5, 0); got != 0 {
-		t.Errorf("log intensityOf with max=0 = %v, want 0", got)
-	}
-	v.logScale = false
-	if got := v.intensityOf(5, 0); got != 0 {
-		t.Errorf("intensityOf with max=0 = %v, want 0", got)
+		// Zero max never divides by zero.
+		if got := v.intensityOf(5, 0); got != 0 {
+			t.Errorf("mode %d intensityOf with max=0 = %v, want 0", mode, got)
+		}
 	}
 }
 
@@ -652,7 +665,17 @@ func TestLogScaleRenderAndCacheKeys(t *testing.T) {
 	}
 	linKey := v.renderCacheKey(0, 0)
 
-	v.logScale = true
+	v.scaleMode = scaleSqrt
+	sqrtText := v.generateRenderText()
+	if !strings.Contains(sqrtText, "(sqrt scale, 100% = busiest cell)") {
+		t.Errorf("sqrt render missing sqrt legend")
+	}
+	if !strings.Contains(sqrtText, "sqrt scale, step label = requests") {
+		t.Errorf("sqrt render missing request-count ramp labels")
+	}
+	sqrtKey := v.renderCacheKey(0, 0)
+
+	v.scaleMode = scaleLog
 	logText := v.generateRenderText()
 	if !strings.Contains(logText, "(log scale, 100% = busiest cell)") {
 		t.Errorf("log render missing log legend")
@@ -660,11 +683,12 @@ func TestLogScaleRenderAndCacheKeys(t *testing.T) {
 	if !strings.Contains(logText, "log scale, step label = requests") {
 		t.Errorf("log render missing request-count ramp labels")
 	}
-	if logText == linear {
-		t.Errorf("log and linear renders identical")
+	if logText == linear || sqrtText == linear || logText == sqrtText {
+		t.Errorf("scale-mode renders not distinct")
 	}
-	if logKey := v.renderCacheKey(0, 0); logKey == linKey {
-		t.Errorf("linear and log cache keys collide: %d", logKey)
+	logKey := v.renderCacheKey(0, 0)
+	if linKey == sqrtKey || linKey == logKey || sqrtKey == logKey {
+		t.Errorf("scale-mode cache keys collide: %d %d %d", linKey, sqrtKey, logKey)
 	}
 }
 

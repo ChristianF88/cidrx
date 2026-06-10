@@ -20,8 +20,8 @@ type VisualizationView struct {
 	requests          []ingestor.Request
 	currentClusterSet int
 	totalClusterSets  int
-	blockScale        int  // /16 bins per display-cell side (0 → default 8)
-	logScale          bool // brightness mapping: false = linear, true = log
+	blockScale        int // /16 bins per display-cell side (0 → default 8)
+	scaleMode         int // brightness mapping: scaleLinear, scaleSqrt or scaleLog
 
 	// Legacy caching for performance (kept for compatibility)
 	cachedTrafficData map[int][256][256]uint32 // Cache traffic data per trie
@@ -243,14 +243,10 @@ func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
 }
 
 // renderCacheKey returns the render-text cache key for a (trie, cluster set)
-// pair under the current brightness mode. Linear and log renders differ, so
-// log mode is offset into its own key space.
+// pair under the current brightness mode. Renders differ per mode, so each
+// scale mode is offset into its own key space.
 func (v *VisualizationView) renderCacheKey(trie, set int) int {
-	key := trie*1000 + set
-	if v.logScale {
-		key += 1_000_000
-	}
-	return key
+	return trie*1000 + set + v.scaleMode*1_000_000
 }
 
 // clusteredCacheKey returns the composite cache key for the clustered grid of
@@ -360,7 +356,7 @@ func (v *VisualizationView) generateRenderText() string {
 	grid := 256 / scale
 	content.WriteString(fmt.Sprintf("[dim]Grid: %d×%d cells - 1 cell = %d×%d /16 bins[white]\n", grid, grid, scale, scale))
 	content.WriteString(fmt.Sprintf("[dim]Legend: cell brightness = requests in cell (%s, 100%% = busiest cell) | [red]Red dot[white] = share of cell's requests inside detected cluster ranges[white]\n", v.scaleName()))
-	content.WriteString("[dim]Navigate: ←→ change cluster set, 'l' linear/log scale, ↑↓ scroll, 'r' results, 'q' quit[white]\n\n")
+	content.WriteString("[dim]Navigate: ←→ change cluster set, 'l' linear/sqrt/log scale, ↑↓ scroll, 'r' results, 'q' quit[white]\n\n")
 
 	if v.maxTraffic == 0 {
 		content.WriteString("[yellow]Loading traffic data...[white]\n")
@@ -461,16 +457,16 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 	content.WriteString("B\n")
 
 	// Footer with color legend. In linear mode the 10% steps speak for
-	// themselves; in log mode percentages would mislead, so each grey step is
-	// labelled with the request count it starts at (inverse of the log map).
+	// themselves; in the nonlinear modes percentages would mislead, so each
+	// grey step is labelled with the request count it starts at (inverse map).
 	rampColors := [...]string{"black", "#202020", "#303030", "#404040", "#505050", "#606060", "#808080", "#A0A0A0", "#C0C0C0", "#E0E0E0", "white"}
-	if v.logScale {
-		content.WriteString("\n[dim]Traffic Intensity (log scale, step label = requests per cell at lower bound):[white]\n")
+	if v.scaleMode != scaleLinear {
+		content.WriteString(fmt.Sprintf("\n[dim]Traffic Intensity (%s, step label = requests per cell at lower bound):[white]\n", v.scaleName()))
 		for i, color := range rampColors {
 			if i == 0 {
 				content.WriteString("[black]███[white]=0 ")
 			} else {
-				content.WriteString(fmt.Sprintf("[%s]███[white]≥%s ", color, output.FormatNumber(int(intensityThresholdCount(float64(i-1)/10, maxCellTraffic)))))
+				content.WriteString(fmt.Sprintf("[%s]███[white]≥%s ", color, output.FormatNumber(int(v.intensityThresholdCount(float64(i-1)/10, maxCellTraffic)))))
 			}
 			if i == 4 {
 				content.WriteString("\n")
@@ -554,38 +550,65 @@ func (v *VisualizationView) effectiveScale() int {
 	return 8
 }
 
+// Brightness mappings, cycled by the 'l' key. Sqrt sits between linear (small
+// cells crushed to black) and log (small cells inflated): perceptual middle
+// ground, endpoints exact in all three modes (0 → black, busiest cell → white).
+const (
+	scaleLinear = iota
+	scaleSqrt
+	scaleLog
+	scaleModeCount
+)
+
 // scaleName names the current brightness mapping for legend text.
 func (v *VisualizationView) scaleName() string {
-	if v.logScale {
+	switch v.scaleMode {
+	case scaleSqrt:
+		return "sqrt scale"
+	case scaleLog:
 		return "log scale"
+	default:
+		return "linear"
 	}
-	return "linear"
 }
 
 // intensityOf maps a display cell's request total to [0,1] relative to the
-// busiest cell on the map. Linear by default; in log mode log1p(x)/log1p(max),
-// which keeps the endpoints (0 → 0, max → 1) and redistributes the middle.
+// busiest cell on the map. Linear: x/max. Sqrt: sqrt(x/max) — power scale,
+// middle ground between linear and log. Log: log1p(x)/log1p(max). All modes
+// keep the endpoints (0 → 0, max → 1) and only redistribute the middle.
 func (v *VisualizationView) intensityOf(traffic, maxCellTraffic uint32) float64 {
 	if maxCellTraffic == 0 {
 		return 0
 	}
-	if v.logScale {
+	switch v.scaleMode {
+	case scaleSqrt:
+		return math.Sqrt(float64(traffic) / float64(maxCellTraffic))
+	case scaleLog:
 		return math.Log1p(float64(traffic)) / math.Log1p(float64(maxCellTraffic))
+	default:
+		return float64(traffic) / float64(maxCellTraffic)
 	}
-	return float64(traffic) / float64(maxCellTraffic)
 }
 
-// intensityThresholdCount inverts the log intensity map: the request count at
-// which a cell reaches intensity t. Used for the log-mode legend labels.
-func intensityThresholdCount(t float64, maxCellTraffic uint32) uint32 {
-	return uint32(math.Ceil(math.Expm1(t * math.Log1p(float64(maxCellTraffic)))))
+// intensityThresholdCount inverts the current intensity map: the request count
+// at which a cell reaches intensity t. Used for legend labels in the nonlinear
+// modes (where percentage labels would mislead).
+func (v *VisualizationView) intensityThresholdCount(t float64, maxCellTraffic uint32) uint32 {
+	switch v.scaleMode {
+	case scaleSqrt:
+		return uint32(math.Ceil(t * t * float64(maxCellTraffic)))
+	case scaleLog:
+		return uint32(math.Ceil(math.Expm1(t * math.Log1p(float64(maxCellTraffic)))))
+	default:
+		return uint32(math.Ceil(t * float64(maxCellTraffic)))
+	}
 }
 
-// ToggleIntensityScale flips the brightness mapping between linear and log and
-// re-renders. Both modes keep separate render-text cache entries, so toggling
-// back and forth is served from cache after the first render of each mode.
+// ToggleIntensityScale cycles the brightness mapping linear → sqrt → log and
+// re-renders. Each mode keeps its own render-text cache entries, so cycling
+// is served from cache after the first render of each mode.
 func (v *VisualizationView) ToggleIntensityScale() {
-	v.logScale = !v.logScale
+	v.scaleMode = (v.scaleMode + 1) % scaleModeCount
 	v.RenderCached()
 	v.app.updateStatusBar()
 }

@@ -68,6 +68,12 @@ func (f *fakeIngestor) Close() error {
 	return nil
 }
 
+func (f *fakeIngestor) Stats() ingestor.IngestStats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return ingestor.IngestStats{QueueDepth: len(f.batches)}
+}
+
 func (f *fakeIngestor) closeCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

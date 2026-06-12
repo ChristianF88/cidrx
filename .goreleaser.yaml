@@ -109,7 +109,7 @@ release:
   header: |
     ## cidrx {{.Version}}
 
-    High-performance botnet detection tool.
+    High-performance IP clustering tool for web-server access logs.
 
     ### Installation
 
